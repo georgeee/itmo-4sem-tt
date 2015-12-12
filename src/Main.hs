@@ -1,7 +1,8 @@
 module Main where
 import Text.Parsec
 import System.Console.GetOpt
-import LambdaParser
+import UntypedLambda
+import qualified Data.HashSet as HS
 import Data.List
 import Control.Monad
 import Data.List
@@ -38,5 +39,9 @@ main = do
   let (actions, nonOptions, errors) = getOpt Permute options args
   opts <- foldl (>>=) (return defaultOptions) actions
 
+  let perLine parser f = multiline opts $ return . either (("Error: " ++) . show) f . parse (spaces >> parser) ""
+
   case optTask opts of
-    1 -> multiline opts $ return . either (("Error: " ++) . show) show . parse (ulParse) ""
+    1 -> perLine ulParse show
+    2 -> perLine ulParse $ show . sort . HS.toList . freeVars
+    3 -> perLine sParse $ either (++ " isn't free for substitution") show . performSubst
