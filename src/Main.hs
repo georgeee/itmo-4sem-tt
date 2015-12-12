@@ -1,7 +1,6 @@
 module Main where
 import Text.Parsec
 import System.Console.GetOpt
-import LambdaTypes
 import LambdaParser
 import Data.List
 import Control.Monad

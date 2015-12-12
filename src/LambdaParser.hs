@@ -1,7 +1,7 @@
 {-# LANGUAGE FlexibleContexts #-}
 module LambdaParser where
 
-import LambdaTypes
+import UntypedLambda
 --import Text.ParserCombinators.Parsec hiding ((<|>))
 import Text.Parsec hiding ((<|>), many)
 import Control.Applicative

@@ -1,4 +1,4 @@
-module LambdaTypes where
+module UntypedLambda where
 
 type Var = String
 
