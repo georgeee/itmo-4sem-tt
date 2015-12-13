@@ -1,9 +1,11 @@
 {-# LANGUAGE FlexibleContexts #-}
 module UntypedLambda where
 
-import Text.Parsec hiding ((<|>), many)
+import Control.Monad.State.Strict
+import Text.Parsec hiding ((<|>), many, State)
 import Control.Applicative
 import qualified Data.HashSet as HS
+import qualified Data.HashMap.Strict as HM
 
 type Var = String
 
@@ -59,3 +61,42 @@ performSubst subst = impl HS.empty $ sExpr subst
                                 else Right e
         impl i (ULAbs v e) = ULAbs v <$> impl (HS.insert v i) e
         impl i (ULApp l r) = ULApp <$> impl i l <*> impl i r
+
+collectAllAbsVars :: UntypedLambda -> HS.HashSet Var
+collectAllAbsVars = impl
+  where impl e@(ULVar v) = HS.empty
+        impl (ULAbs v e) = v `HS.insert` impl e
+        impl (ULApp l r) = impl l `HS.union` impl r
+
+renameFree s rmap = impl s
+  where impl (ULVar v) = case v `HM.lookup` rmap of
+                                Just n -> ULVar n
+                                Nothing -> ULVar v
+        impl (ULAbs v e) = case v `HM.lookup` rmap of
+                                   Just n -> ULAbs v e
+                                   Nothing -> ULAbs v $ impl e
+        impl (ULApp l r) = ULApp (impl l) (impl r)
+
+substFreeNoCheck v eInit s = impl eInit
+  where impl e@(ULVar u) = if v == u
+                            then s
+                            else e
+        impl e@(ULAbs u g) = if v == u
+                              then e
+                              else ULAbs u $ impl g
+        impl (ULApp l r) = ULApp (impl l) (impl r)
+
+normalize :: UntypedLambda -> UntypedLambda
+normalize eInit = evalState (impl HS.empty eInit) 0
+  where impl :: HS.HashSet Var -> UntypedLambda -> State Int UntypedLambda
+        impl i e@(ULVar _) = pure e
+        impl i (ULAbs v e) = ULAbs v <$> impl (HS.insert v i) e
+        impl i (ULApp l r) = impl i l >>= \l' -> (impl i r >>= impl' l')
+          where impl' :: UntypedLambda -> UntypedLambda -> State Int UntypedLambda
+                impl' (ULAbs v e) s = let vs = collectAllAbsVars e `HS.intersection` freeVars s
+                                          rmap = foldM (\m v -> HM.insert v <$> updState <*> pure m) HM.empty vs
+                                       in substFreeNoCheck v e . renameFree s <$> rmap >>= impl i
+                impl' l' r' = pure $ ULApp l' r'
+                updState :: State Int Var
+                updState = gets ((:) '_' . show) <* modify' (+1)
+

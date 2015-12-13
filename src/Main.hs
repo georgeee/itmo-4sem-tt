@@ -45,3 +45,4 @@ main = do
     1 -> perLine ulParse show
     2 -> perLine ulParse $ show . sort . HS.toList . freeVars
     3 -> perLine sParse $ either (++ " isn't free for substitution") show . performSubst
+    4 -> perLine ulParse $ show . normalize
