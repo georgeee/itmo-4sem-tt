@@ -1,8 +1,11 @@
+{-# LANGUAGE PackageImports #-}
 module Main where
 import Text.Parsec
 import System.Console.GetOpt
 import UntypedLambda
-import qualified Data.HashSet as HS
+import qualified "unordered-containers" Data.HashMap.Strict as HM
+import qualified "unordered-containers" Data.HashSet as HS
+import SKI
 import Data.List
 import Control.Monad
 import Data.List
@@ -46,3 +49,5 @@ main = do
     2 -> perLine ulParse $ show . sort . HS.toList . freeVars
     3 -> perLine sParse $ either (++ " isn't free for substitution") show . performSubst
     4 -> perLine ulParse $ show . normalize
+    -1 -> perLine ulParse $ show . prettify . convertToSKI
+    5 -> perLine ulParse $ show . convertToSKI

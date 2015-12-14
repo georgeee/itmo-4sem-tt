@@ -1,11 +1,12 @@
-{-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE PackageImports, FlexibleContexts #-}
 module UntypedLambda where
 
+import Data.Maybe
 import Control.Monad.State.Strict
 import Text.Parsec hiding ((<|>), many, State)
 import Control.Applicative
-import qualified Data.HashSet as HS
-import qualified Data.HashMap.Strict as HM
+import qualified "unordered-containers" Data.HashMap.Strict as HM
+import qualified "unordered-containers" Data.HashSet as HS
 
 type Var = String
 
@@ -32,6 +33,9 @@ ulParse = expr
         app = foldl1 ULApp <$> many1 (atom <* spaces)
         atom = parens expr <|> ULVar <$> var
         parens e = char '(' *> expr <* spaces <* char ')'
+
+testUlParse :: String -> UntypedLambda
+testUlParse = either (error.show) id . parse ulParse ""
 
 var :: (Stream s m Char) => ParsecT s u m Var
 var = (:) <$> letter <*> many (alphaNum <|> char '\'')
@@ -68,14 +72,22 @@ collectAllAbsVars = impl
         impl (ULAbs v e) = v `HS.insert` impl e
         impl (ULApp l r) = impl l `HS.union` impl r
 
-renameFree s rmap = impl s
-  where impl (ULVar v) = case v `HM.lookup` rmap of
+renameFree = impl
+  where impl (ULVar v) rmap  = case v `HM.lookup` rmap of
                                 Just n -> ULVar n
                                 Nothing -> ULVar v
-        impl (ULAbs v e) = case v `HM.lookup` rmap of
-                                   Just n -> ULAbs v e
-                                   Nothing -> ULAbs v $ impl e
-        impl (ULApp l r) = ULApp (impl l) (impl r)
+        impl (ULAbs v e) rmap = ULAbs v $ impl e (v `HM.delete` rmap)
+        impl (ULApp l r) rmap = ULApp (impl l rmap) (impl r rmap)
+
+renameBound fv = impl HM.empty 0
+  where impl m _ (ULVar v) = case v `HM.lookup` m of
+                                Just n -> ULVar n
+                                Nothing -> ULVar v
+        impl m i (ULAbs v e) = if v `HS.member` fv
+                                  then ULAbs u $ impl (HM.insert v u m) (i + 1) e
+                                  else ULAbs v $ impl m i e
+                where u = 'x' : (show i)
+        impl m i (ULApp l r) = ULApp (impl m i l) (impl m i r)
 
 substFreeNoCheck v eInit s = impl eInit
   where impl e@(ULVar u) = if v == u
@@ -87,16 +99,21 @@ substFreeNoCheck v eInit s = impl eInit
         impl (ULApp l r) = ULApp (impl l) (impl r)
 
 normalize :: UntypedLambda -> UntypedLambda
-normalize eInit = evalState (impl HS.empty eInit) 0
-  where impl :: HS.HashSet Var -> UntypedLambda -> State Int UntypedLambda
-        impl i e@(ULVar _) = pure e
-        impl i (ULAbs v e) = ULAbs v <$> impl (HS.insert v i) e
-        impl i (ULApp l r) = impl i l >>= \l' -> (impl i r >>= impl' l')
-          where impl' :: UntypedLambda -> UntypedLambda -> State Int UntypedLambda
-                impl' (ULAbs v e) s = let vs = collectAllAbsVars e `HS.intersection` freeVars s
-                                          rmap = foldM (\m v -> HM.insert v <$> updState <*> pure m) HM.empty vs
-                                       in substFreeNoCheck v e . renameFree s <$> rmap >>= impl i
-                impl' l' r' = pure $ ULApp l' r'
-                updState :: State Int Var
-                updState = gets ((:) '_' . show) <* modify' (+1)
-
+normalize = implDeep'
+  where
+    impl (ULAbs v e) = ULAbs v <$> impl e
+    impl e@(ULApp l r) = let l' = implDeep l
+                             r' = implDeep r
+                             l'' = extract l l'
+                             r'' = extract r r'
+                             e' = ULApp l'' r''
+                             e'' = impl' l'' r''
+                          in if isJust l' || isJust r'
+                              then Just $ extract e' e''
+                              else e''
+    impl _ = Nothing
+    impl' (ULAbs v e) s = Just $ substFreeNoCheck v (renameBound (freeVars s) e) s
+    impl' _ _ = Nothing
+    implDeep e = maybe Nothing (Just . implDeep') $ impl e
+    implDeep' e = maybe e implDeep' $ impl e
+    extract = flip maybe id
