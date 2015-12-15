@@ -29,7 +29,7 @@ ulParse = expr
   where expr = (app >>= \a -> (ULApp a <$> abs <|> pure a))
                     <|> abs <?> "expr"
         abs = char '\\' >> spaces
-                     >> ULAbs <$> var <*> (spaces >> char '.' >> spaces >> expr)
+                     >> ULAbs <$> var <*> (spaces >> (string "." <|> string "->") >> spaces >> expr)
         app = foldl1 ULApp <$> many1 (atom <* spaces)
         atom = parens expr <|> ULVar <$> var
         parens e = char '(' *> expr <* spaces <* char ')'
