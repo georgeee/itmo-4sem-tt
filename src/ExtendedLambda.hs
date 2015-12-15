@@ -114,3 +114,9 @@ checkNotKeyWord x = if x `elem` ["in", "let"]
                        else return x
 
 testElParse = testParser elParse
+
+
+--elNormalize :: ExtendedLambda -> ExtendedLambda
+--elNormalize e = impl HM.empty e
+--  where impl m e = case impl' m e of
+
