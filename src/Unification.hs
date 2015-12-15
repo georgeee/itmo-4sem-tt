@@ -1,5 +1,5 @@
 {-# LANGUAGE PackageImports, FlexibleContexts #-}
-module Unification where
+module Unification(Name, Equation(..), Term(..), eqsParse, eqParse, testEqsParse, unify, SolvedSystem) where
 
 import Data.Either
 import Data.List
@@ -7,7 +7,6 @@ import Control.Monad.State.Strict
 import Text.Parsec hiding ((<|>), many, State)
 import Control.Applicative hiding (Const)
 import qualified "unordered-containers" Data.HashMap.Strict as HM
-import qualified "unordered-containers" Data.HashSet as HS
 
 infixl 1 :=
 data Equation = (:=) Term Term
