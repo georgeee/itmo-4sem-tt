@@ -1,14 +1,13 @@
 {-# LANGUAGE PackageImports, FlexibleContexts #-}
 module UntypedLambda where
 
+import Common
 import Data.Maybe
 import Control.Monad.State.Strict
 import Text.Parsec hiding ((<|>), many, State)
 import Control.Applicative
 import qualified "unordered-containers" Data.HashMap.Strict as HM
 import qualified "unordered-containers" Data.HashSet as HS
-
-type Var = String
 
 data UntypedLambda = ULVar { ulVarName :: Var }
                    | ULAbs { ulVarName :: Var, ulExpr :: UntypedLambda }
@@ -31,14 +30,9 @@ ulParse = expr
         abs = char '\\' >> spaces
                      >> ULAbs <$> var <*> (spaces >> (string "." <|> string "->") >> spaces >> expr)
         app = foldl1 ULApp <$> many1 (atom <* spaces)
-        atom = parens expr <|> ULVar <$> var
-        parens e = char '(' *> expr <* spaces <* char ')'
+        atom = parens' expr <|> ULVar <$> var
 
-testUlParse :: String -> UntypedLambda
-testUlParse = either (error.show) id . parse ulParse ""
-
-var :: (Stream s m Char) => ParsecT s u m Var
-var = (:) <$> letter <*> many (alphaNum <|> char '\'')
+testUlParse = testParser ulParse
 
 sParse :: (Stream s m Char) => ParsecT s u m Substitution
 sParse = Substitution <$> ulParse

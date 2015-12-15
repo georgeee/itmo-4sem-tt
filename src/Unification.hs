@@ -1,6 +1,7 @@
 {-# LANGUAGE PackageImports, FlexibleContexts #-}
 module Unification(Name, Equation(..), Term(..), eqsParse, eqParse, testEqsParse, unify, SolvedSystem) where
 
+import Common
 import Data.Either
 import Data.List
 import Control.Monad.State.Strict
@@ -31,14 +32,12 @@ eqParse :: (Stream s m Char) => ParsecT s u m Equation
 eqParse = eq
   where eq = (:=) <$> term <*> (spaces *> char '=' *> spaces *> term)
         termList = sepBy1 term (spaces *> char ',' <* spaces)
-        term = (Const <$> cName) <|> (vName >>= \n -> spaces *> ((Function n <$> parens termList) <|> (pure $ Var n)))
-        parens e = char '(' *> e <* spaces <* char ')'
+        term = (Const <$> cName) <|> (vName >>= \n -> spaces *> ((Function n <$> parens' termList) <|> (pure $ Var n)))
         vName = (:) <$> lower <*> many (alphaNum <|> char '\'')
         cName = (:) <$> upper <*> many (alphaNum <|> char '\'')
 
 testEqsParse :: String -> [Equation]
-testEqsParse = either (error.show) id . parse eqsParse ""
-
+testEqsParse = testParser eqsParser
 
 --type UnState = State SolvedSystem
 --performBasic :: [Equation] -> UnState [Equation]
