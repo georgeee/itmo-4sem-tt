@@ -3,7 +3,9 @@ module ExtendedLambda where
 
 import Data.List
 import Common
+import Data.Foldable as F
 import Data.Maybe
+import Control.Monad.Except
 import Control.Monad.State.Strict
 import Text.Parsec hiding ((<|>), many, State)
 import Control.Applicative
@@ -15,8 +17,8 @@ data IOp = Add | Subtract
 infixl 1 ::=
 data LetBinding = (::=) Var ExtendedLambda
 
-infixl 1 :~
-infixl 1 :@
+infixl 2 :~
+infixl 2 :@
 data ExtendedLambda = Let [LetBinding] ExtendedLambda
                     | I Integer
                     | B Bool
@@ -115,8 +117,65 @@ checkNotKeyWord x = if x `elem` ["in", "let"]
 
 testElParse = testParser elParse
 
+--toRight = lift . either pure pure
+--left' = left . Left
 
---elNormalize :: ExtendedLambda -> ExtendedLambda
---elNormalize e = impl HM.empty e
---  where impl m e = case impl' m e of
+type NormalizationStep = ExtendedLambda -> ExceptT String (Either ExtendedLambda) ExtendedLambda
+type NMonad a = State Int (HS.HashSet Var, a)
+type RLBPair = ([LetBinding], HM.HashMap Var ExtendedLambda, [LetBinding])
 
+lbVar (v ::= _) = v
+
+infixl 4 <.$>
+infixl 4 <.*>
+
+(<.$>) :: (Functor f, Functor g) => (a -> b) -> g (f a) -> g (f b)
+f <.$> g = fmap f <$> g
+
+(<.*>) :: (Applicative f, Monad m) => m (f (a -> b)) -> m (f a) -> m (f b)
+mf <.*> mg = mf >>= \fab -> mg >>= \fa -> return $ fab <*> fa
+
+normalizeRecursion :: ExtendedLambda -> ExtendedLambda
+normalizeRecursion = snd . flip evalState 0 . impl
+  where -- returns (expr with recursion replaced, set of free variables inside resulting expression)
+        impl :: ExtendedLambda -> NMonad ExtendedLambda
+        impl (Let ls e) = Let <.$> replaceLB' <.*> impl e
+          where allLetVars = HM.fromList $ zip (map lbVar ls) [1..]
+                replaceLB' = (\(ls, _, ls') -> reverse ls ++ ls') <.$> foldM (replaceLB allLetVars) (HS.empty, ([], HM.empty, [])) (zip [1..] ls)
+        impl (a :~ b) = (:~) <.$> impl a <.*> impl b
+        impl (a :@ b) = (:@) <.$> impl a <.*> impl b
+        impl e@(V v) = return (HS.singleton v, e)
+        impl e = return $ pure e
+
+        freshId x = (('_' : x) ++ ) . show <$> (get <* modify (+1))
+
+        replaceLB :: HM.HashMap Var Int -> (HS.HashSet Var, RLBPair) -> (Int, LetBinding) -> NMonad RLBPair
+        replaceLB vs (fv0, (bs, rm, newLbs)) (i, x ::= e)
+            = impl (replaceAllFree rm e) >>= \(fv, e') ->
+              let needY = x `HS.member` fv
+                  -- fv' is a set of vars of same let, comming after current (if not empty, wee need to present new var x0)
+                  fv' = HM.keys $ HM.filterWithKey (\k i' -> HS.member k fv && i' > i) vs
+                  exprs n = (foldr' (flip (:@) . V) (V n) $ reverse fv', foldr' Abs e' fv')
+                  resE e'' = if needY then Y :@ Abs x e'' else e''
+                  resFV = fv0 `mappend` HS.delete x fv
+               in if F.null fv'
+                     then return (resFV, ((x ::= resE e'):bs, rm, newLbs))
+                     else freshId x >>= \n ->
+                       let (replacement, e'') = exprs n
+                        in return (resFV, ((n ::= resE e''):bs, insertWithReplace x replacement rm, (x ::= replacement):newLbs))
+
+replaceAllFree :: HM.HashMap Var ExtendedLambda -> ExtendedLambda -> ExtendedLambda
+replaceAllFree = impl
+  where impl vs (Let ls e) = Let (map implLb ls) $ impl vs' e
+          where implLb (x ::= e) = x ::= impl vs' e
+                lbVars = map lbVar ls
+                vs' = foldr' HM.delete vs lbVars
+        impl vs (l :~ r) = impl vs l :~ impl vs r
+        impl vs (Abs v e) = Abs v $ impl (v `HM.delete` vs) e
+        impl vs (l :@ r) = impl vs l :@ impl vs r
+        impl vs (V v) = case HM.lookup v vs of
+                          Just n -> n
+                          Nothing -> V v
+        impl _ e = e
+
+insertWithReplace x e = HM.insert x e . HM.map (replaceAllFree (HM.singleton x e))
