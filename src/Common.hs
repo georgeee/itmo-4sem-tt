@@ -2,6 +2,7 @@
 module Common where
 import Text.Parsec hiding ((<|>), many, State)
 import Control.Applicative
+import Control.Monad.List
 
 type Var = String
 
@@ -13,3 +14,6 @@ parens' e = char '(' *> e <* spaces <* char ')'
 
 testParser :: Parsec String () a -> String -> a
 testParser f = either (error . show) id . parse f ""
+
+retList :: Monad m => [a] -> ListT m a
+retList = ListT . return

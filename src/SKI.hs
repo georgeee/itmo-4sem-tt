@@ -3,6 +3,7 @@ module SKI where
 import Data.Either(isRight)
 import Data.Maybe (isJust)
 import UntypedLambda
+import Common
 
 infixl 1 :@
 data SKI = V Var | S | K | I | SKI :@ SKI
