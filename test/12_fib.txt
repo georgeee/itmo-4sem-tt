@@ -1,0 +1,10 @@
+let fib = \n .
+  let f = \i . \p .
+    let l = PrL p,
+        r = PrR p,
+        n' = Minus n i,
+        i' = Minus i 1
+     in If (Eq i' 0) p (f i' <r, Plus l r>)
+  in f 0 <0, 1>
+in fib 4
+                                  
