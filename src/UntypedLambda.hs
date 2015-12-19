@@ -1,7 +1,9 @@
 {-# LANGUAGE PackageImports, FlexibleContexts #-}
 module UntypedLambda where
 
+import qualified Debug.Trace as DT
 import Common
+import Data.Char
 import Data.Maybe
 import Control.Monad.State.Strict
 import Text.Parsec hiding ((<|>), many, State)
@@ -19,10 +21,17 @@ data Substitution = Substitution { sExpr :: UntypedLambda
                                  }
 
 instance Show UntypedLambda where
-  show (ULVar name) = name
-  show (ULAbs name e) = "(\\" ++ name ++ ". " ++ (show e) ++ ")"
-  show (ULApp l r) = "(" ++ (show l) ++ " " ++ (show r) ++ ")"
+  show = show'
+    where show' (ULVar name) = name
+          show' (ULAbs v e) = "(\\" ++ v ++ ". " ++ (show' e) ++ ")"
+          show' (ULApp l r) = (show' l) ++ " " ++ (show'' r)
 
+          show'' r@(ULApp _ _) = "(" ++ (show' r) ++ ")"
+          show'' r = show' r
+
+showUlWithParens (ULVar name) = name
+showUlWithParens (ULAbs name e) = "(\\" ++ name ++ " -> " ++ (showUlWithParens e) ++ ")"
+showUlWithParens (ULApp l r) = "(" ++ (showUlWithParens l) ++ " " ++ (showUlWithParens r) ++ ")"
 ulParse :: (Stream s m Char) => ParsecT s u m UntypedLambda
 ulParse = expr
   where expr = (app >>= \a -> (ULApp a <$> abs <|> pure a))
@@ -73,17 +82,31 @@ renameFree = impl
         impl (ULAbs v e) rmap = ULAbs v $ impl e (v `HM.delete` rmap)
         impl (ULApp l r) rmap = ULApp (impl l rmap) (impl r rmap)
 
-renameBound fv = impl HM.empty 0
-  where impl m _ (ULVar v) = case v `HM.lookup` m of
-                                Just n -> ULVar n
-                                Nothing -> ULVar v
-        impl m i (ULAbs v e) = if v `HS.member` fv
-                                  then ULAbs u $ impl (HM.insert v u m) (i + 1) e
-                                  else ULAbs v $ impl m i e
-                where u = 'x' : (show i)
-        impl m i (ULApp l r) = ULApp (impl m i l) (impl m i r)
+renameBound :: HS.HashSet Var -> UntypedLambda -> State Int UntypedLambda
+renameBound fv e = trace' ("renameBound " ++ show (e, fv)) . impl HM.empty $ e
+  where impl m (ULVar v) = return $ impl' (HM.lookup v m)
+          where impl' (Just n) = ULVar n
+                impl' _ = ULVar v
+        impl m (ULAbs v e) = if v `HS.member` fv
+                              then upd v >>= \u -> ULAbs u <$> impl (HM.insert v u m) e
+                              else ULAbs v <$> impl m e
+        impl m (ULApp l r) = ULApp <$> (impl m l) <*> (impl m r)
+        upd v = get >>= \i -> let u = 'x' : (show i) in put (i + 1) >> return u
 
-substFreeNoCheck v eInit s = impl eInit
+--renameBound fv = impl HM.empty 0
+--  where impl m _ (ULVar v) = case v `HM.lookup` m of
+--                                Just n -> ULVar n
+--                                Nothing -> ULVar v
+--        impl m i (ULAbs v e) = if v `HS.member` fv
+--                                  then ULAbs u $ impl (HM.insert v u m) (i + 1) e
+--                                  else ULAbs v $ impl m i e
+--                where u = 'x' : (show i)
+--        impl m i (ULApp l r) = ULApp (impl m i l) (impl m i r)
+--
+
+--substFreeNoCheck :: var -> s -> t -> t [v := s]
+substFreeNoCheck :: Var -> UntypedLambda -> UntypedLambda -> UntypedLambda
+substFreeNoCheck v s eInit = impl eInit
   where impl e@(ULVar u) = if v == u
                             then s
                             else e
@@ -92,22 +115,35 @@ substFreeNoCheck v eInit s = impl eInit
                               else ULAbs u $ impl g
         impl (ULApp l r) = ULApp (impl l) (impl r)
 
+--trace' = \x y -> y
+trace' x y = y >>= \y' -> DT.trace (x ++ " ==> " ++ (show y')) (return y')
+
+findAllVars :: UntypedLambda -> HS.HashSet Var
+findAllVars e = execState (find e) HS.empty
+  where find (ULVar u) = modify (HS.insert u)
+        find (ULAbs u g) = modify (HS.insert u) >> find g
+        find (ULApp l r) = find l >> find r
+
 normalize :: UntypedLambda -> UntypedLambda
-normalize = implDeep'
-  where
-    impl (ULAbs v e) = ULAbs v <$> impl e
-    impl e@(ULApp l r) = let l' = implDeep l
-                             r' = implDeep r
-                             l'' = extract l l'
-                             r'' = extract r r'
-                             e' = ULApp l'' r''
-                             e'' = impl' l'' r''
-                          in if isJust l' || isJust r'
-                              then Just $ extract e' e''
-                              else e''
-    impl _ = Nothing
-    impl' (ULAbs v e) s = Just $ substFreeNoCheck v (renameBound (freeVars s) e) s
-    impl' _ _ = Nothing
-    implDeep e = maybe Nothing (Just . implDeep') $ impl e
-    implDeep' e = maybe e implDeep' $ impl e
-    extract = flip maybe id
+normalize e = evalState (normalize' e) maxI
+  where maxI = (+1) . maximum . (:) 0 . map (read . tail) . filter pred . HS.toList $ findAllVars e
+        pred (_:[]) = False
+        pred ('x':xs) = all isAlphaNum xs
+        pred _ = False
+
+normalize' :: UntypedLambda -> State Int UntypedLambda
+normalize' e = trace' ("normalize' " ++ (show e)) $ maybe (rightRedux e) rightRedux =<< whnf e
+
+rightRedux :: UntypedLambda -> State Int UntypedLambda
+rightRedux e@(ULAbs v s) = trace' ("rightRedux " ++ (show e)) $ ULAbs v <$> normalize' s
+rightRedux e@(ULApp l r) = trace' ("rightRedux " ++ (show e)) $ ULApp <$> rightRedux l <*> normalize' r
+rightRedux v = trace' ("rightRedux " ++ (show v)) $ return v
+
+whnf :: UntypedLambda -> State Int (Maybe UntypedLambda)
+whnf e@(ULVar _) = trace' ("whnf " ++ (show e)) $ return Nothing
+whnf e@(ULAbs _ _) = trace' ("whnf " ++ (show e)) $ return Nothing
+whnf e@(ULApp (ULAbs v t) s) = trace' ("whnf " ++ (show e)) $ t' >>= \t'' -> maybe (Just t'') Just <$> whnf t''
+  where t' = substFreeNoCheck v s <$> renameBound (freeVars s) t
+whnf e@(ULApp l r) = trace' ("whnf " ++ (show e)) $ whnf'' =<< whnf l
+  where whnf'' Nothing = return Nothing
+        whnf'' (Just l') = maybe (Just $ ULApp l' r) Just <$> whnf (ULApp l' r)

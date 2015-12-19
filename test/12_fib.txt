@@ -1,10 +1,7 @@
-let fib = \n .
-  let f = \i . \p .
+\n -> let fib = \n . \p .
     let l = PrL p,
         r = PrR p,
-        n' = Minus n i,
-        i' = Minus i 1
-     in If (Eq i' 0) p (f i' <r, Plus l r>)
-  in f 0 <0, 1>
-in fib 4
+        n' = Minus n 1
+     in If (Eq n' 0) p (fib n' <r, Plus l r>)
+in PrR (fib n <1, 1>)
                                   
