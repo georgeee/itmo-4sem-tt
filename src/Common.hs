@@ -26,3 +26,7 @@ testParserSt p str = get >>= \s -> let (a, s') = testParser' p s str
 
 retList :: Monad m => [a] -> ListT m a
 retList = ListT . return
+
+integer :: (Stream s m Char, Integral a, Read a) => ParsecT s u m a
+integer = read <$> (many1 digit)
+
