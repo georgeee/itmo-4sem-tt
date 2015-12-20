@@ -83,7 +83,7 @@ renameFree = impl
         impl (ULApp l r) rmap = ULApp (impl l rmap) (impl r rmap)
 
 renameBound :: HS.HashSet Var -> UntypedLambda -> State Int UntypedLambda
-renameBound fv e = trace' ("renameBound " ++ show (e, fv)) . impl HM.empty $ e
+renameBound fv e = trace' ("renameBound " ++ show (e, fv)) $ impl HM.empty e
   where impl m (ULVar v) = return $ impl' (HM.lookup v m)
           where impl' (Just n) = ULVar n
                 impl' _ = ULVar v
@@ -115,8 +115,8 @@ substFreeNoCheck v s eInit = impl eInit
                               else ULAbs u $ impl g
         impl (ULApp l r) = ULApp (impl l) (impl r)
 
---trace' = \x y -> y
-trace' x y = y >>= \y' -> DT.trace (x ++ " ==> " ++ (show y')) (return y')
+trace' = \x y -> y
+--trace' x y = y >>= \y' -> DT.trace (x ++ " ==> " ++ (show y')) (return y')
 
 findAllVars :: UntypedLambda -> HS.HashSet Var
 findAllVars e = execState (find e) HS.empty

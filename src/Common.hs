@@ -12,8 +12,8 @@ var = (:) <$> letter <*> many (alphaNum <|> char '\'')
 parens' :: (Stream s m Char) => ParsecT s u m a -> ParsecT s u m a
 parens' e = char '(' *> spaces *> e <* spaces <* char ')'
 
-testParser :: Parsec String () a -> String -> a
-testParser f = either (error . show) id . parse f ""
+testParser :: Parsec String u a -> u -> String -> a
+testParser f u = either (error . show) id . runParser f u ""
 
 retList :: Monad m => [a] -> ListT m a
 retList = ListT . return
