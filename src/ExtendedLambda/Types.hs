@@ -20,59 +20,72 @@ infixl 3 :@
 type ELContext = HM.HashMap Var ExtendedLambda
 
 infixl 2 ::=
-data ExtendedLambda = ELContext ::= ExtendedLambdaBase
+data ExtendedLambda = ELContext ::= ExtendedLambdaBase ExtendedLambda
 
 noContext = (HM.empty ::=)
 
-data ExtendedLambdaBase = I Integer
-                    | B Bool
-                    | Y
-                    | PrL
-                    | PrR
-                    | InL
-                    | InR
-                    | Case
-                    | If
-                    | IOp IOp
-                    | OrdOp Ordering
-                    | ExtendedLambda :~ ExtendedLambda --pair
-                    | Abs Var ExtendedLambda
-                    | ExtendedLambda :@ ExtendedLambda
-                    | V Var
+data ExtendedLambdaBase container
+     = I Integer
+     | B Bool
+     | Y
+     | PrL
+     | PrR
+     | InL
+     | InR
+     | Case
+     | If
+     | IOp IOp
+     | OrdOp Ordering
+     | container :~ container --pair
+     | container :@ container --application
+     | Abs Var ExtendedLambda
+     | V Var
+
+class ELambdaContainer e where
+  extractEl :: e -> ExtendedLambdaBase e
+
+instance ELambdaContainer ExtendedLambda where
+  extractEl (_ ::= e) = e
 
 instance Show ExtendedLambda where
-  show = show' 0
+  show = showIdent 0
 
-instance Show ExtendedLambdaBase where
-  show = show'' 0
+class IdentShow a where
+  showIdent :: Int -> a -> String
+
+instance (IdentShow c, ELambdaContainer c) => Show (ExtendedLambdaBase c) where
+  show = showIdent 0
+
+instance (IdentShow c, ELambdaContainer c) => IdentShow (ExtendedLambdaBase c) where
+  showIdent _ (I x) = show x
+  showIdent _ (B b) = if b then "T" else "F"
+  showIdent _ Y = "Y"
+  showIdent _ PrL = "PrL"
+  showIdent _ PrR = "PrR"
+  showIdent _ InL = "InL"
+  showIdent _ InR = "InR"
+  showIdent _ Case = "Case"
+  showIdent _ If = "If"
+  showIdent _ (IOp Add) = "Plus"
+  showIdent _ (IOp Subtract) = "Minus"
+  showIdent _ (OrdOp EQ) = "Eq"
+  showIdent _ (OrdOp LT) = "Lt"
+  showIdent _ (OrdOp GT) = "Gt"
+  showIdent i (l :~ r) = let i' = i + 1 in "<" ++ (showIdent i' l) ++ ", " ++ (showIdent i' r) ++ ">"
+  showIdent i (Abs v e) = let i' = i + 1 in "(\\" ++ v ++ ". " ++ (showIdent i' e) ++ ")"
+  showIdent i (l :@ r) = let i' = i + 1 in (showIdent i' l) ++ " " ++ (show' i' r)
+    where show' i r = case extractEl r of
+                        (_ :@ _) -> "(" ++ (showIdent i r) ++ ")"
+                        _ -> showIdent i r
+  showIdent _ (V v) = v
+
+instance IdentShow ExtendedLambda where
+  showIdent i (bs ::= t) = if HM.null bs then showIdent i t else let i' = i + 1 in
+              concat [ "\n" ++ (sps $ i * 2) ++ "(let " ++ (intercalate (",\n" ++ (sps $ i * 2 + 4)) $ showLBs i' bs)
+                     , "\n" ++ (sps $ i' * 2 - 1) ++ "in " ++ (showIdent i' t) ++ ")"
+                     ]
+    where showLBs i = map (\(v, s) -> v ++ " = " ++ (showIdent i s)) . HM.toList
 
 p i s = (replicate (i*2) ' ') ++ s
 sps = flip replicate ' '
-show' :: Int -> ExtendedLambda -> String
-show' i (bs ::= t) = if HM.null bs then show'' i t else let i' = i + 1 in
-            concat [ "\n" ++ (sps $ i * 2) ++ "(let " ++ (intercalate (",\n" ++ (sps $ i * 2 + 4)) $ showLBs i' bs)
-                   , "\n" ++ (sps $ i' * 2 - 1) ++ "in " ++ (show'' i' t) ++ ")"
-                   ]
-show'' _ (I x) = show x
-show'' _ (B b) = if b then "T" else "F"
-show'' _ Y = "Y"
-show'' _ PrL = "PrL"
-show'' _ PrR = "PrR"
-show'' _ InL = "InL"
-show'' _ InR = "InR"
-show'' _ Case = "Case"
-show'' _ If = "If"
-show'' _ (IOp Add) = "Plus"
-show'' _ (IOp Subtract) = "Minus"
-show'' _ (OrdOp EQ) = "Eq"
-show'' _ (OrdOp LT) = "Lt"
-show'' _ (OrdOp GT) = "Gt"
-show'' i (l :~ r) = let i' = i + 1 in "<" ++ (show' i' l) ++ ", " ++ (show' i' r) ++ ">"
-show'' i (Abs v e) = let i' = i + 1 in "(\\" ++ v ++ ". " ++ (show' i' e) ++ ")"
-show'' i (l :@ r) = let i' = i + 1 in (show' i' l) ++ " " ++ (show''' i' r)
-show'' _ (V v) = v
 
-show''' i r@(_ ::= _ :@ _) = "(" ++ (show' i r) ++ ")"
-show''' i r = show' i r
-
-showLBs i = map (\(v, s) -> v ++ " = " ++ (show' i s)) . HM.toList

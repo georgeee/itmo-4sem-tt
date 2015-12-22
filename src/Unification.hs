@@ -38,7 +38,7 @@ eqParse = eq
         cName = (:) <$> upper <*> many (alphaNum <|> char '\'')
 
 testEqsParse :: String -> [Equation]
-testEqsParse = testParser eqsParse
+testEqsParse = testParser eqsParse ()
 
 type SolvedSystem = HM.HashMap Name Term
 type UnMonad = ListT (StateT SolvedSystem (Either Equation))

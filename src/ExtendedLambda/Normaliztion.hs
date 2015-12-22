@@ -57,10 +57,10 @@ testNormalize = testNormMonad normalize
 elIfTrue = noContext . Abs "x" . noContext . Abs "y" . noContext $ V "x"
 elIfFalse = noContext . Abs "x" . noContext . Abs "y" . noContext $ V "y"
 
-mkApp2 :: ExtendedLambdaBase -> ExtendedLambda -> ExtendedLambda
+mkApp2 :: ExtendedLambdaBase ExtendedLambda -> ExtendedLambda -> ExtendedLambda
 mkApp2 e = noContext . (noContext e :@)
 
-mkApp3 :: ExtendedLambdaBase -> ExtendedLambdaBase -> ExtendedLambda -> ExtendedLambda
+mkApp3 :: ExtendedLambdaBase ExtendedLambda -> ExtendedLambdaBase ExtendedLambda -> ExtendedLambda -> ExtendedLambda
 mkApp3 e1 e2 = noContext . ((:@) . noContext $ noContext e1 :@ noContext e2)
 
 normalize :: ExtendedLambda -> NormMonad ExtendedLambda
@@ -69,7 +69,7 @@ normalize = impl HM.empty
         impl = repeatNorm . impl''
         impl'' m (ls ::= e) = (impl' m' e >>= lift . mergeContexts' ls) `catchError` (lift . mergeContexts' ls >=> left)
           where m' = foldr' (uncurry HM.insert) m $ HM.toList ls
-        impl' :: HM.HashMap Var ExtendedLambda -> ExtendedLambdaBase -> NormMonad ExtendedLambda
+        impl' :: HM.HashMap Var ExtendedLambda -> ExtendedLambdaBase ExtendedLambda -> NormMonad ExtendedLambda
         impl' m ((_ ::= If) :@ (_ ::= B b)) = trace' "if1 " $ return $ if b then elIfTrue else elIfFalse
         impl' m ((_ ::= If) :@ p) = trace' "if2 " $ mkApp2 If <?$> impl m p
         impl' m ((_ ::= (_ ::= IOp op) :@ (_ ::= I i)) :@ (_ ::= I j)) = trace' "iop1 " $ return . noContext . I $ iop op i j
