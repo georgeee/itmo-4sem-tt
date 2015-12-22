@@ -14,6 +14,7 @@ import Text.Parsec hiding ((<|>), many, State, oneOf)
 import Control.Applicative
 import qualified "unordered-containers" Data.HashMap.Strict as HM
 import qualified "unordered-containers" Data.HashSet as HS
+import qualified Data.LinkedHashMap.IntMap as LHM
 
 infixl 4 <**
 infixl 4 **>
@@ -28,7 +29,7 @@ elParse = expr
   where expr = letE <|> (abs <|> appsAbs)
         abs = (\v e -> noContext $ Abs v e) <$> (char '\\' **> var')
                     <*> (spaces *> (string "." <|> string "->") **> expr)
-        letE = do ls <- (try (string "let" *> space) **> (HM.fromList <$> sepBy1 letBind (spaces *> char ',' *> spaces)) <* spaces)
+        letE = do ls <- (try (string "let" *> space) **> (LHM.fromList <$> sepBy1 letBind (spaces *> char ',' *> spaces)) <* spaces)
                   e <- (try (string "in" *> space) **> expr)
                   parsecRunState (mergeContexts' ls e)
         letBind = (,) <$> var' <*> (spaces *> char '=' **> expr)
@@ -74,13 +75,13 @@ infixl 4 <.$>
 infixl 4 <.*>
 
 mergeContexts :: MonadState Int m => ELContext -> ELContext -> m ELContext
-mergeContexts l1 l2 = HM.fromList <$> modifyLs HM.empty (l2' ++ l1')
-  where l1' = HM.toList l1
-        l2' = HM.toList l2
+mergeContexts l1 l2 = LHM.fromList <$> modifyLs LHM.empty (reverse $ l1' ++ l2')
+  where l1' = LHM.toList l1
+        l2' = LHM.toList l2
         modifyLs _ [] = return []
-        modifyLs vs ((v, e):as) = if v `HM.member` vs
-                                     then freshId v >>= \v' -> modifyLs' v' $ HM.insert v (noContext $ V v') vs
-                                     else modifyLs' v $ HM.insert v (noContext $ V v) vs
+        modifyLs vs ((v, e):as) = if v `LHM.member` vs
+                                     then freshId v >>= \v' -> modifyLs' v' $ LHM.insert v (noContext $ V v') vs
+                                     else modifyLs' v $ LHM.insert v (noContext $ V v) vs
           where modifyLs' v' vs' = (:) . (,) v' <$> replaceAllFree vs' e <*> modifyLs vs' as
 
 mergeContexts' l1 (l2 ::= e) = (::= e) <$> mergeContexts l1 l2
@@ -91,15 +92,16 @@ f <.$> g = fmap f <$> g
 (<.*>) :: (Applicative f, Monad m) => m (f (a -> b)) -> m (f a) -> m (f b)
 mf <.*> mg = mf >>= \fab -> mg >>= \fa -> return $ fab <*> fa
 
-insertWithReplace :: MonadState Int m => Var -> ExtendedLambda -> HM.HashMap Var ExtendedLambda -> m (HM.HashMap Var ExtendedLambda)
-insertWithReplace x e m = HM.insert x e <$> mapM (replaceAllFree (HM.singleton x e)) m
+insertWithReplace :: MonadState Int m => Var -> ExtendedLambda -> ELContext -> m ELContext
+insertWithReplace x e m = LHM.insert x e <$> mapM (replaceAllFree (LHM.singleton x e)) m
 
 normalizeRecursion :: MonadState Int m => ExtendedLambda -> m ExtendedLambda
 normalizeRecursion e = snd <$> impl e
   where -- returns (expr with recursion replaced, set of free variables inside resulting expression)
         impl (ls ::= e) = (::=) <.$> replaceLB' <.*> impl' e
-          where allLetVars = HM.fromList $ zip (HM.keys ls) [1..]
-                replaceLB' = (\(ls, _, ls') -> HM.fromList $ reverse ls ++ ls') <.$> foldM (replaceLB allLetVars) (HS.empty, ([], HM.empty, [])) (zip [1..] $ HM.toList ls)
+          where allLetVars = HM.fromList $ zip (LHM.keys ls) [1..]
+                replaceLB' = (\(ls, _, ls') -> LHM.fromList $ reverse ls ++ ls')
+                   <.$> foldM (replaceLB allLetVars) (HS.empty, ([], LHM.empty, [])) (zip [1..] $ LHM.toList ls)
         impl' (a :~ b) = (:~) <.$> impl a <.*> impl b
         impl' (a :@ b) = (:@) <.$> impl a <.*> impl b
         impl' (Abs v e) = impl e >>= \(fv, e') -> return (HS.delete v fv, Abs v e')
@@ -130,14 +132,14 @@ freeVars el = execState (fvs' HS.empty el) HS.empty
         fvs i (V v) = if v `HS.member` i then return () else modify (HS.insert v)
         fvs _ _ = return ()
         fvs' i (ls ::= e) = mapM_ (fvs' i') ls >> fvs i' e
-          where i' = foldr HS.insert i $ HM.keys ls
+          where i' = foldr HS.insert i $ LHM.keys ls
 
 
 renameBound :: MonadState Int m => HS.HashSet Var -> ExtendedLambda -> m ExtendedLambda
 renameBound fv = impl HM.empty
-  where impl m (ls ::= e) = m' >>= \m'' -> (::=) <$> (HM.fromList <$> mapM (implLB m'') (HM.toList ls)) <*> impl' m'' e
+  where impl m (ls ::= e) = m' >>= \m'' -> (::=) <$> (LHM.fromList <$> mapM (implLB m'') (LHM.toList ls)) <*> impl' m'' e
           where implLB m'' (v, e) = (,) (maybe v id $ v `HM.lookup` m'') <$> impl m'' e
-                m' = foldM (\m v -> freshId v >>= \u -> return $ HM.insert v u m) m $ filter (flip HS.member fv) $ HM.keys ls
+                m' = foldM (\m v -> freshId v >>= \u -> return $ HM.insert v u m) m $ filter (flip HS.member fv) $ LHM.keys ls
         impl' m (l :~ r) = (:~) <$> impl m l <*> impl m r
         impl' m (l :@ r) = (:@) <$> impl m l <*> impl m r
         impl' m (Abs v e) = if v `HS.member` fv
@@ -151,7 +153,7 @@ renameBound fv = impl HM.empty
 traceM' x y = y
 --traceM' x y = y >>= \y' -> trace (x ++ " ==> " ++ (show y')) (return y')
 
-replaceAllFree :: MonadState Int m => HM.HashMap Var ExtendedLambda -> ExtendedLambda -> m ExtendedLambda
+replaceAllFree :: MonadState Int m => ELContext -> ExtendedLambda -> m ExtendedLambda
 replaceAllFree vs e = impl =<< renameBound fv e
   where impl (ls ::= e) = traceM' "replaceFree: let" $ do e' <- impl' e
                                                           ls' <- traverse impl ls
@@ -159,8 +161,8 @@ replaceAllFree vs e = impl =<< renameBound fv e
         impl' (l :~ r) = traceM' "replaceFree: pair" $ (\l' r' -> noContext $ l' :~ r') <$> impl l <*> impl r
         impl' (Abs v e) = traceM' "replaceFree: abs" $ (noContext . Abs v) <$> impl e
         impl' (l :@ r) = traceM' "replaceFree: app" $ (\l' r' -> noContext $ l' :@ r') <$> impl l <*> impl r
-        impl' e@(V v) = traceM' ("replaceFree: V " ++ v) $ return $ case HM.lookup v vs of
+        impl' e@(V v) = traceM' ("replaceFree: V " ++ v) $ return $ case LHM.lookup v vs of
                           Just n -> n
                           Nothing -> noContext e
         impl' e = traceM' ("replaceFree: other " ++ (show e)) $ return $ noContext e
-        fv = foldr' (flip mappend . freeVars) (HS.fromList $ HM.keys vs) vs
+        fv = foldr' (flip mappend . freeVars) (HS.fromList $ LHM.keys vs) vs

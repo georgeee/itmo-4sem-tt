@@ -29,9 +29,10 @@ data ELType = TV Name | TBool | TInt
 
 data ELTypeScheme = TVSet ::: ELType
 
+infixl :* 5
 class ELTypeHolder t where
   ftv :: t -> TVSet
-  subst :: Subst -> t -> t
+  (:*) :: Subst -> t -> t
 
 
 instance ELTypeHolder ELType where
@@ -41,35 +42,45 @@ instance ELTypeHolder ELType where
           impl (l :|: r) = impl l >> impl r
           impl (l :&: r) = impl l >> impl r
           impl _ = return ()
-  subst s (TV v) = case v `HM.lookup` s of
+  s :* (TV v) = case v `HM.lookup` s of
                      Just t -> t
                      _ -> TV v
-  subst s (l :>: r) = subst s l :>: subst s r
-  subst s (l :&: r) = subst s l :&: subst s r
-  subst s (l :|: r) = subst s l :|: subst s r
-  subst s e = e
+  s :* (l :>: r) = s :* l :>: s :* r
+  s :* (l :&: r) = s :* l :&: s :* r
+  s :* (l :|: r) = s :* l :|: s :* r
+  s :* e = e
 
 instance ELTypeHolder ELTypeScheme where
   ftv (vs ::: t) = ftv t `HS.difference` vs
-  subst s (vs ::: t) = vs ::: subst (foldr HM.delete s vs) t
+  s :* (vs ::: t) = vs ::: foldr HM.delete s vs :* t
 
 instance ELTypeHolder a => ELTypeHolder [a] where
   ftv = foldr ((HS.union) . ftv) HS.empty
-  subst = map . subst
+  (:*) = map . (:*)
 
 instance ELTypeHolder Subst where
   ftv m = ftv $ HM.elems m
-  subst s m = HM.map (subst (foldr HM.delete s $ HM.keys m)) m
+  s :* m = HM.map ((:*) (foldr HM.delete s $ HM.keys m)) m
 
 generalize :: Subst -> ELType -> ELTypeScheme
 generalize s t = ftv t `HS.difference` ftv s ::: t
 
 instantiate :: MonadState Int m => ELTypeScheme -> m ELType
-instantiate (ctx ::: e) = flip subst e <$> foldM (\m v -> freshId v >>= \nv -> return $ HM.insert v (TV nv) m) HM.empty ctx
+instantiate (ctx ::: e) = (:* e) <$> foldM (\m v -> freshId v >>= \nv -> return $ HM.insert v (TV nv) m) HM.empty ctx
 
 initTypeEnv = HM.empty
 
-algorithmW :: MonadState Int m => ExtendedLambda -> m (Either String (Subst, ELTypeScheme))
+algorithmW :: MonadState Int m => ExtendedLambda -> EitherT String m (Subst, ELTypeScheme)
 algorithmW e = w initTypeEnv e
-  where w s (ctx ::= e) = undefined
+  where w s (m ::= e2) = if LHM.null m
+                            then w' s m
+                            else let k = head $ LHM.keys m
+                                     e1 = m LHM.! k
+                                     m' = k `LHM.delete` m
+                                  in do (s1, t1) <- w s a
+                                        let s1s = s1 :* s
+                                            s' = HM.insert x (generalize s1s t1) s1s
+                                        (s2, t2) <- w s' (as ::= e)
+                                        return (s2 :* s1, t2)
+
 

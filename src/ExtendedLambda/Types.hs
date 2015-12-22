@@ -5,6 +5,7 @@ import Common
 import Data.Maybe
 import Data.List
 import qualified "unordered-containers" Data.HashMap.Strict as HM
+import qualified Data.LinkedHashMap.IntMap as LHM
 
 data IOp = Add | Subtract
 
@@ -17,12 +18,12 @@ iop Subtract = (-)
 infixl 4 :~
 infixl 3 :@
 
-type ELContext = HM.HashMap Var ExtendedLambda
+type ELContext = LHM.LinkedHashMap Var ExtendedLambda
 
 infixl 2 ::=
 data ExtendedLambda = ELContext ::= ExtendedLambdaBase ExtendedLambda
 
-noContext = (HM.empty ::=)
+noContext = (LHM.empty ::=)
 
 data ExtendedLambdaBase container
      = I Integer
@@ -80,11 +81,11 @@ instance (IdentShow c, ELambdaContainer c) => IdentShow (ExtendedLambdaBase c) w
   showIdent _ (V v) = v
 
 instance IdentShow ExtendedLambda where
-  showIdent i (bs ::= t) = if HM.null bs then showIdent i t else let i' = i + 1 in
+  showIdent i (bs ::= t) = if LHM.null bs then showIdent i t else let i' = i + 1 in
               concat [ "\n" ++ (sps $ i * 2) ++ "(let " ++ (intercalate (",\n" ++ (sps $ i * 2 + 4)) $ showLBs i' bs)
                      , "\n" ++ (sps $ i' * 2 - 1) ++ "in " ++ (showIdent i' t) ++ ")"
                      ]
-    where showLBs i = map (\(v, s) -> v ++ " = " ++ (showIdent i s)) . HM.toList
+    where showLBs i = map (\(v, s) -> v ++ " = " ++ (showIdent i s)) . LHM.toList
 
 p i s = (replicate (i*2) ' ') ++ s
 sps = flip replicate ' '

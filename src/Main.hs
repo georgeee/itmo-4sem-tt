@@ -59,7 +59,7 @@ main = do
   opts <- foldl (>>=) (return defaultOptions) actions
 
   case optTask opts of
-    1 -> perLine opts ulParse showWithBrackets
+    1 -> perLine opts ulParse showUlWithParens
     2 -> perLine opts ulParse $ show . sort . HS.toList . freeVars
     3 -> perLine opts sParse $ either (++ " isn't free for substitution") show . performSubst
     4 -> perLine opts ulParse $ show . normalize

@@ -41,7 +41,7 @@ ulParse = expr
         app = foldl1 ULApp <$> many1 (atom <* spaces)
         atom = parens' expr <|> ULVar <$> var
 
-testUlParse = testParser ulParse
+testUlParse = testParser ulParse ()
 
 sParse :: (Stream s m Char) => ParsecT s u m Substitution
 sParse = Substitution <$> ulParse
