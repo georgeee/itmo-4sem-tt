@@ -26,8 +26,8 @@ data SimpleType = (:>:) SimpleType SimpleType | V Name
 
 instance Show SimpleType where
   show (V x) = x
-  show (l@(_ :>: _) :>: r) = "(" ++ show l ++ ") -> " ++ (show r)
-  show (l :>: r) = show l ++ " -> " ++  (show r)
+  show (l@(_ :>: _) :>: r) = "(" ++ show l ++ ") -> " ++ show r
+  show (l :>: r) = show l ++ " -> " ++ show r
 
 toSimpleType :: Term -> SimpleType
 toSimpleType (Var x) = V x

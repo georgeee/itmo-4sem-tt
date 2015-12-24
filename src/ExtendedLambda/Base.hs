@@ -118,8 +118,8 @@ testElParseSt = testParserSt elParse
 freshId' :: (CounterBasedState s, MonadState s m) => m Int
 freshId' = gets counterNext >>= \(i, n) -> put n >> return i
 
-freshId :: (CounterBasedState s, MonadState s m) => String -> m String
-freshId x = ("_x" ++ ) . show <$> (gets counterNext >>= \(i, n) -> put n >> return i)
+freshId :: (CounterBasedState s, MonadState s m) => m String
+freshId = ("_x" ++ ) . show <$> (gets counterNext >>= \(i, n) -> put n >> return i)
 
 infixl 4 <.$>
 infixl 4 <.*>
@@ -130,7 +130,7 @@ mergeContexts l1 l2 = LHM.fromList <$> modifyLs LHM.empty (reverse $ l1' ++ l2')
         l2' = LHM.toList l2
         modifyLs _ [] = return []
         modifyLs vs ((v, e):as) = if v `LHM.member` vs
-                                     then freshId v >>= \v' -> modifyLs' v' $ LHM.insert v (noContext $ V v') vs
+                                     then freshId >>= \v' -> modifyLs' v' $ LHM.insert v (noContext $ V v') vs
                                      else modifyLs' v $ LHM.insert v (noContext $ V v) vs
           where modifyLs' v' vs' = (:) . (,) v' <$> replaceAllFree vs' e <*> modifyLs vs' as
 
@@ -168,7 +168,7 @@ normalizeRecursion e = snd <$> impl e
                   resFV = fv0 `mappend` HS.delete x fv
                in if F.null fv'
                      then return (resFV, ((x ,resE e'):bs, rm, newLbs))
-                     else freshId x >>= \n ->
+                     else freshId >>= \n ->
                        let replacement = noContext $ foldr' (\a b -> noContext b :@ noContext (V a)) (V n) (reverse fv')
                            e'' = foldr' (\v e -> noContext $ Abs v e) e' fv'
                         in insertWithReplace x replacement rm
@@ -189,11 +189,11 @@ renameBound :: (CounterBasedState s, MonadState s m) => HS.HashSet Var -> Extend
 renameBound fv = impl HM.empty
   where impl m (ls ::= e) = m' >>= \m'' -> (::=) <$> (LHM.fromList <$> mapM (implLB m'') (LHM.toList ls)) <*> impl' m'' e
           where implLB m'' (v, e) = (,) (maybe v id $ v `HM.lookup` m'') <$> impl m'' e
-                m' = foldM (\m v -> freshId v >>= \u -> return $ HM.insert v u m) m $ filter (flip HS.member fv) $ LHM.keys ls
+                m' = foldM (\m v -> freshId >>= \u -> return $ HM.insert v u m) m $ filter (flip HS.member fv) $ LHM.keys ls
         impl' m (l :~ r) = (:~) <$> impl m l <*> impl m r
         impl' m (l :@ r) = (:@) <$> impl m l <*> impl m r
         impl' m (Abs v e) = if v `HS.member` fv
-                               then freshId v >>= \u -> Abs u <$> impl (HM.insert v u m) e
+                               then freshId >>= \u -> Abs u <$> impl (HM.insert v u m) e
                                else Abs v <$> impl m e
         impl' m (V v) = return $ V $ case v `HM.lookup` m of
                                  Just u -> u

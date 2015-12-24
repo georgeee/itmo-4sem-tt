@@ -48,7 +48,7 @@ left' = lift . lift . Left
 -- Easy syntactic reductions and checking (deeping not more then two-three levels into term)
 ac1 :: Equation -> UnMonad Equation
 ac1 e@(Const c := Const d) = if c == d
-                                 then pure e
+                                 then retList []
                                  else left' e
 ac1 e@(Function _ _ := Const _) = left' e
 ac1 e@(Const _ := Function _ _) = left' e
@@ -59,7 +59,7 @@ ac1 (Var x := e@(Var y)) = if x == y
                               then retList [] -- eliminate t = t
                               else ac1V x e
 ac1 (Var x := e) = ac1V x e
-acl (e := Var x) = ac1V x e
+ac1 (e := Var x) = ac1V x e
 
 ac1V v s = gets (HM.lookup v) >>= impl -- v = s, where v is a var
   where impl Nothing = insertToMap v s >> retList []
