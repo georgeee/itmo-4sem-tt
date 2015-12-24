@@ -39,7 +39,7 @@ data ExtendedLambdaBase container
      | OrdOp Ordering
      | container :~ container --pair
      | container :@ container --application
-     | Abs Var ExtendedLambda
+     | Abs Var container
      | V Var
 
 class ELambdaContainer e where

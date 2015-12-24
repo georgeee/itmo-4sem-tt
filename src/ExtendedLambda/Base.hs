@@ -1,9 +1,14 @@
 {-# LANGUAGE PackageImports, FlexibleContexts #-}
-module ExtendedLambda.Base (elParse, testElParse, testElParseSt, mergeContexts, mergeContexts'
-                           , freshId, insertWithReplace, normalizeRecursion, freeVars, renameBound, replaceAllFree) where
+module ExtendedLambda.Base (elParse, testElParse, testElParseSt, mergeContexts, mergeContexts', CounterBasedState(..)
+                           , freshId, freshId', insertWithReplace, normalizeRecursion, freeVars, renameBound, replaceAllFree
+                           , NormMonad, oneOf, (<?$>), (<?*>), repeatNorm, toRight, runNormMonad, runNormMonad', testNormMonad
+                           , elIfTrue, elIfFalse, elCaseL, elCaseR
+                           ) where
 
 import ExtendedLambda.Types
 
+import Control.Monad.Trans.Either
+import Control.Monad.Except
 import Debug.Trace
 import Data.List
 import Common
@@ -16,15 +21,57 @@ import qualified "unordered-containers" Data.HashMap.Strict as HM
 import qualified "unordered-containers" Data.HashSet as HS
 import qualified Data.LinkedHashMap.IntMap as LHM
 
+elIfTrue = noContext . Abs "x" . noContext . Abs "y" . noContext $ V "x"
+elIfFalse = noContext . Abs "x" . noContext . Abs "y" . noContext $ V "y"
+elCaseL = noContext . Abs "t" . noContext . Abs "l" . noContext . Abs "r" . noContext $ noContext (V "l") :@ noContext (V "t")
+elCaseR = noContext . Abs "t" . noContext . Abs "l" . noContext . Abs "r" . noContext $ noContext (V "r") :@ noContext (V "t")
+
+class CounterBasedState a where
+  counterNext :: a -> (Int, a)
+  counterEmptyState :: a
+
+instance CounterBasedState Int where
+  counterNext a = (a, a + 1)
+  counterEmptyState = 0
+
+type NormMonad s a = EitherT a (StateT s (Except String)) a
+
+oneOf :: (Monad m) => (a -> a -> a) -> EitherT a m a -> EitherT a m a -> EitherT a m a
+oneOf b l r = (l >>= \l' -> b l' <$> toRight r) `catchError` (\l' -> (b l' <$> r) `catchError` (left . b l'))
+
+infixl 4 <?$>
+(<?$>) :: Monad m => (a -> a) -> EitherT a m a -> EitherT a m a
+(<?$>) f m = (f <$> m) `catchError` (left . f)
+
+infixl 4 <?*>
+(<?*>) :: Monad m => EitherT a m (a -> a) -> EitherT a m a -> EitherT a m a
+(<?*>) f m = f >>= (<?$> m)
+
+repeatNorm :: (a -> NormMonad s a) -> a -> NormMonad s a
+repeatNorm m = m >=> toRight . repeatNorm m
+
+toRight :: Functor n => EitherT b n b -> EitherT e' n b
+toRight = mapEitherT (fmap $ either Right Right)
+
+runNormMonad :: CounterBasedState s => NormMonad s a -> Either String a
+runNormMonad = fmap (either id id) . runNormMonad'
+
+runNormMonad' :: CounterBasedState s => NormMonad s a -> Either String (Either a a)
+runNormMonad' = runExcept . flip evalStateT counterEmptyState . runEitherT
+
+testNormMonad :: CounterBasedState s => (ExtendedLambda -> NormMonad s a) -> String -> Either String (Either a a)
+testNormMonad m s = runNormMonad' (testElParseSt s >>= normalizeRecursion >>= m)
+
 infixl 4 <**
 infixl 4 **>
 x <** y = x <* spaces  <* y
 x **> y = x *> spaces  *> y
 
+parsecRunState :: Monad m => State u a -> ParsecT s u m a
 parsecRunState m = getState >>= \s -> let (a, s') = runState m s
                                        in putState s' >> return a
 
-elParse :: (Stream s m Char) => ParsecT s Int m ExtendedLambda
+elParse :: (Stream s m Char, CounterBasedState u) => ParsecT s u m ExtendedLambda
 elParse = expr
   where expr = letE <|> (abs <|> appsAbs)
         abs = (\v e -> noContext $ Abs v e) <$> (char '\\' **> var')
@@ -63,18 +110,21 @@ checkNotKeyWord x = if x `elem` ["in", "let"]
                        then fail $ x ++ " is reserved as a keyword"
                        else return x
 
-testElParse = testParser elParse 0
+testElParse = testParser elParse (0::Int)
 
-testElParseSt :: MonadState Int m => String -> m ExtendedLambda
+testElParseSt :: (CounterBasedState s, MonadState s m) => String -> m ExtendedLambda
 testElParseSt = testParserSt elParse
 
-freshId :: (Num s, Show s, MonadState s f) => String -> f String
-freshId x = ("_x" ++ ) . show <$> (get <* modify (+1))
+freshId' :: (CounterBasedState s, MonadState s m) => m Int
+freshId' = gets counterNext >>= \(i, n) -> put n >> return i
+
+freshId :: (CounterBasedState s, MonadState s m) => String -> m String
+freshId x = ("_x" ++ ) . show <$> (gets counterNext >>= \(i, n) -> put n >> return i)
 
 infixl 4 <.$>
 infixl 4 <.*>
 
-mergeContexts :: MonadState Int m => ELContext -> ELContext -> m ELContext
+mergeContexts :: (CounterBasedState s, MonadState s m) => ELContext -> ELContext -> m ELContext
 mergeContexts l1 l2 = LHM.fromList <$> modifyLs LHM.empty (reverse $ l1' ++ l2')
   where l1' = LHM.toList l1
         l2' = LHM.toList l2
@@ -92,10 +142,10 @@ f <.$> g = fmap f <$> g
 (<.*>) :: (Applicative f, Monad m) => m (f (a -> b)) -> m (f a) -> m (f b)
 mf <.*> mg = mf >>= \fab -> mg >>= \fa -> return $ fab <*> fa
 
-insertWithReplace :: MonadState Int m => Var -> ExtendedLambda -> ELContext -> m ELContext
+insertWithReplace :: (CounterBasedState s, MonadState s m) => Var -> ExtendedLambda -> ELContext -> m ELContext
 insertWithReplace x e m = LHM.insert x e <$> mapM (replaceAllFree (LHM.singleton x e)) m
 
-normalizeRecursion :: MonadState Int m => ExtendedLambda -> m ExtendedLambda
+normalizeRecursion :: (CounterBasedState s, MonadState s m) => ExtendedLambda -> m ExtendedLambda
 normalizeRecursion e = snd <$> impl e
   where -- returns (expr with recursion replaced, set of free variables inside resulting expression)
         impl (ls ::= e) = (::=) <.$> replaceLB' <.*> impl' e
@@ -135,7 +185,7 @@ freeVars el = execState (fvs' HS.empty el) HS.empty
           where i' = foldr HS.insert i $ LHM.keys ls
 
 
-renameBound :: MonadState Int m => HS.HashSet Var -> ExtendedLambda -> m ExtendedLambda
+renameBound :: (CounterBasedState s, MonadState s m) => HS.HashSet Var -> ExtendedLambda -> m ExtendedLambda
 renameBound fv = impl HM.empty
   where impl m (ls ::= e) = m' >>= \m'' -> (::=) <$> (LHM.fromList <$> mapM (implLB m'') (LHM.toList ls)) <*> impl' m'' e
           where implLB m'' (v, e) = (,) (maybe v id $ v `HM.lookup` m'') <$> impl m'' e
@@ -153,7 +203,7 @@ renameBound fv = impl HM.empty
 traceM' x y = y
 --traceM' x y = y >>= \y' -> trace (x ++ " ==> " ++ (show y')) (return y')
 
-replaceAllFree :: MonadState Int m => ELContext -> ExtendedLambda -> m ExtendedLambda
+replaceAllFree :: (CounterBasedState s, MonadState s m) => ELContext -> ExtendedLambda -> m ExtendedLambda
 replaceAllFree vs e = impl =<< renameBound fv e
   where impl (ls ::= e) = traceM' "replaceFree: let" $ do e' <- impl' e
                                                           ls' <- traverse impl ls
