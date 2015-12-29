@@ -1,5 +1,5 @@
 {-# LANGUAGE PackageImports, FlexibleContexts #-}
-module ExtendedLambda.Types (IOp(..), iop, ordOp, ELContext, noContext, ExtendedLambdaBase(..), ExtendedLambda(..)) where
+module ExtendedLambda.Types (IOp(..), iop, ordOp, ELContext, noContext, ExtendedLambdaBase(..), ExtendedLambda(..), IdentShow(..), ELambdaContainer(..)) where
 
 import Common
 import Data.Maybe

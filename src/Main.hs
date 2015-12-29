@@ -1,12 +1,16 @@
 {-# LANGUAGE PackageImports #-}
 module Main where
 import Text.Parsec
+import Control.Monad.State.Strict
+import Control.Monad.Trans.Either
+import ExtendedLambda.Base
+import ExtendedLambda.AlgorithmW as EL
 import System.Console.GetOpt
-import UntypedLambda
+import UntypedLambda as UL
 import qualified "unordered-containers" Data.HashMap.Strict as HM
 import qualified "unordered-containers" Data.HashSet as HS
 import Unification
-import SimpleTypedLambda
+import SimpleTypedLambda as STL
 import SKI
 import Data.List
 import Control.Monad
@@ -60,13 +64,14 @@ main = do
 
   case optTask opts of
     1 -> perLine opts ulParse showUlWithParens
-    2 -> perLine opts ulParse $ show . sort . HS.toList . freeVars
+    2 -> perLine opts ulParse $ show . sort . HS.toList . UL.freeVars
     3 -> perLine opts sParse $ either (++ " isn't free for substitution") show . performSubst
     4 -> perLine opts ulParse $ show . normalize
     -1 -> perLine opts ulParse $ show . prettify . convertToSKI
     5 -> perLine opts ulParse $ show . convertToSKI
     6 -> full opts eqsParse $ showUnifyResult . unify
-    7 -> perLine opts ulParse $ showSTResult . findType
+    7 -> perLine opts ulParse $ showSTResult . STL.findType
+    13 -> fullReader opts $ \s -> return $ either ("Error " ++) id $ (\(t,e) -> show t ++ "\n" ++ show e) <$> evalState (runEitherT $ testElParseSt s >>= normalizeRecursion >>= EL.findType) 0
 
 showSTResult (Left e) = "Lamda has no type, failed on equation " ++ (show e)
 showSTResult (Right (l, t, m)) = (show l) ++ " :: " ++ (show t) ++ "\nContext:\n" ++ (showMap " :: " m)

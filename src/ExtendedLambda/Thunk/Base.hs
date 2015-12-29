@@ -65,6 +65,9 @@ joinCtx :: MonadState ThunkState m => ThunkContext -> ThunkRef -> m ThunkRef
 joinCtx ctx thRef = if HM.null ctx
                        then return thRef
                        else do
+                          s' <- thShowIdent 0 thRef
+                          c' <- showLBs 0 ctx
+                          traceM $ "joinCtx " ++ show c' ++ " " ++ s'
                           th <- getThunk thRef
                           let l1 = HM.toList ctx
                               l2 = HM.toList $ thContext th
@@ -120,7 +123,7 @@ thShowIdent i thRef = do th <- getThunk thRef
                             return $ concat [ "\n" ++ (sps $ i * 2) ++ "(let " ++ (intercalate (",\n" ++ (sps $ i * 2 + 4)) lbs)
                                             , "\n" ++ (sps $ i' * 2 - 1) ++ "in " ++ t' ++ ")"
                                             ]
-    where showLBs i = mapM (\(v, s) -> ((v ++ " = " ++ show s ++ ":") ++) <$> thShowIdent i s) . HM.toList
+showLBs i = mapM (\(v, s) -> ((v ++ " = " ++ show s ++ ":") ++) <$> thShowIdent i s) . HM.toList
 
 p i s = (replicate (i*2) ' ') ++ s
 sps = flip replicate ' '
@@ -132,17 +135,17 @@ getThunkExpr thRef = gets (thExpr . (HM.! thRef) . thunks)
 newThunk th = ThunkRef <$> freshId' >>= \thRef -> updThunks (HM.insert thRef th { thId = thRef, thCounter = 1 }) >> return thRef
 
 release :: MonadState ThunkState m => ThunkRef -> m ()
-release thRef = updThunks $ \ths -> let th = ths HM.! thRef
-                                     in if thCounter th == 1
-                                           then HM.delete thRef ths
-                                           else HM.insert thRef th { thCounter = thCounter th - 1 } ths
+release thRef = return ()
+--release thRef = updThunks $ \ths -> let th = ths HM.! thRef
+--                                     in if thCounter th == 1
+--                                           then HM.delete thRef ths
+--                                           else HM.insert thRef th { thCounter = thCounter th - 1 } ths
 
 obtain :: MonadState ThunkState m => ThunkRef -> m ThunkRef
 obtain thRef = updThunk thRef (\th -> th { thCounter = thCounter th + 1 }) >> return thRef
 
 convertToThunks :: MonadState ThunkState m => ExtendedLambda -> m ThunkRef
 convertToThunks (ctx ::= e) = do thId <- ThunkRef <$> freshId'
-                                 traceM $ "convertToThunks: new id " ++ show thId
                                  base <- convertBase e
                                  ctx' <- convertCtx ctx
                                  let thunk = Thunk { thId = thId

@@ -2,7 +2,7 @@
 module ExtendedLambda.Base (elParse, testElParse, testElParseSt, mergeContexts, mergeContexts', CounterBasedState(..)
                            , freshId, freshId', insertWithReplace, normalizeRecursion, freeVars, renameBound, replaceAllFree
                            , NormMonad, oneOf, (<?$>), (<?*>), repeatNorm, toRight, runNormMonad, runNormMonad', testNormMonad
-                           , elIfTrue, elIfFalse, elCaseL, elCaseR
+                           , elIfTrue, elIfFalse, elCaseL, elCaseR, runNormMonadSt
                            ) where
 
 import ExtendedLambda.Types
@@ -58,6 +58,9 @@ runNormMonad = fmap (either id id) . runNormMonad'
 
 runNormMonad' :: CounterBasedState s => NormMonad s a -> Either String (Either a a)
 runNormMonad' = runExcept . flip evalStateT counterEmptyState . runEitherT
+
+runNormMonadSt :: CounterBasedState s => NormMonad s a -> Either String (Either a a, s)
+runNormMonadSt = runExcept . flip runStateT counterEmptyState . runEitherT
 
 testNormMonad :: CounterBasedState s => (ExtendedLambda -> NormMonad s a) -> String -> Either String (Either a a)
 testNormMonad m s = runNormMonad' (testElParseSt s >>= normalizeRecursion >>= m)
