@@ -31,26 +31,28 @@ normalize = impl HM.empty
         impl' :: ThunkContext -> ThunkRef -> NormMonad ThunkState ThunkRef
         impl' m thRef =
            do s' <- thShowIdent 0 thRef
-              traceM $ "Traversing to s'=" ++ s'
+              traceM $ "Traversing to s'=" ++ s' ++ "\n m = " ++ (show m)
               th <- getThunk thRef
-              let m' = foldr' (uncurry HM.insert) m $ HM.toList ctx
-                  ctx = thContext th
+              let ctx = thContext th
               case thExpr th of
-                  V v -> case v `HM.lookup` m' of
-                           Just varRef -> do release thRef
-                                             traceM . (("Substituting to var " ++ v) ++) =<< thShowIdent 0 varRef
-                                             obtain varRef
-                           _ -> left thRef
+                  V v -> let substVar varRef = do release thRef
+                                                  traceM . (("Substituting to var " ++ v) ++) =<< thShowIdent 0 varRef
+                                                  obtain varRef
+                          in case v `HM.lookup` m of
+                               Just varRef -> substVar varRef
+                               _ -> case v `HM.lookup` ctx of
+                                     Just varRef -> substVar varRef
+                                     _ -> left thRef
                   pTh :@ qTh -> do p <- getThunkExpr pTh
                                    q <- getThunkExpr qTh
                                    pCtx <- thContext <$> getThunk pTh
                                    qCtx <- thContext <$> getThunk qTh
                                    let digLeft = trace "digLeft" $
-                                                 (do pTh' <- impl m' pTh
+                                                 (do pTh' <- flip impl pTh =<< joinCtxM m ctx
                                                      release thRef
                                                      newThunk th { thExpr = pTh' :@ qTh }) `catchError` const (left thRef)
                                        digRight = trace "digRight" $
-                                                  (do qTh' <- impl m' qTh
+                                                  (do qTh' <- flip impl qTh =<< joinCtxM m ctx
                                                       release thRef
                                                       newThunk th { thExpr = pTh :@ qTh' }) `catchError` const (left thRef)
                                    case p of
@@ -82,7 +84,9 @@ normalize = impl HM.empty
                                               _ -> digRight
                                      (Abs v s) -> do release pTh
                                                      release thRef
-                                                     joinCtx ctx =<< joinCtx (HM.singleton v qTh) =<< joinCtx pCtx s
+                                                     qTh' <- joinCtx m =<< joinCtx ctx qTh
+                                                     traceM . ("qTh' " ++) =<< thShowIdent 0 qTh'
+                                                     joinCtx ctx =<< joinCtx (HM.singleton v qTh') =<< joinCtx pCtx s
                                      Y -> do restTh <- newThunk th { thContext = HM.empty }
                                              obtain qTh
                                              release thRef
