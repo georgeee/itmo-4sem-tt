@@ -14,6 +14,10 @@ import ExtendedLambda.Base
 import Data.Hashable
 import Control.Monad.State.Strict
 
+traceM' :: Monad m => String -> m ()
+traceM' = const (return ())
+trace' x y = y
+
 newtype ThunkRef = ThunkRef Int
   deriving (Eq, Hashable)
 
@@ -45,7 +49,7 @@ initState = execState initiateThunkState $ ThunkState { thunks = HM.empty
                        }
 
 initiateThunkState :: MonadState ThunkState m => m ()
-initiateThunkState = trace "Hey" $ do
+initiateThunkState = do
                         e1 <- convertToThunks elIfTrue
                         e2 <- convertToThunks elIfFalse
                         e3 <- convertToThunks elCaseL
@@ -72,7 +76,7 @@ joinCtx ctx thRef = do
          else do
             s' <- thShowIdent 0 thRef
             c' <- showLBs 0 ctx'
-            traceM $ "joinCtx " ++ show c' ++ " " ++ s'
+            traceM' $ "joinCtx " ++ show c' ++ " " ++ s'
             th <- getThunk thRef
             let l1 = HM.toList ctx'
                 l2 = HM.toList $ thContext th
@@ -91,8 +95,7 @@ normalizeCtx vs rCtx ((v, e) : as) = if v `HS.member` vs
 
 
 joinCtxM :: MonadState ThunkState m => ThunkContext -> ThunkContext -> m ThunkContext
-joinCtxM m1 m2 = HM.union m2 <$> mapM (joinCtx m1) m1'
-  where m1' = HM.difference m1 m2
+joinCtxM m ctx = HM.union ctx <$> mapM (joinCtx m) (HM.difference m ctx)
 
 thShowIdent' :: MonadState ThunkState m => Int -> ExtendedLambdaBase ThunkRef -> m String
 thShowIdent' _ (I x) = return $ show x
