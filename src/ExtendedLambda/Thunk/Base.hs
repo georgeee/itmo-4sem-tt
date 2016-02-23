@@ -2,6 +2,7 @@
     MultiParamTypeClasses, GeneralizedNewtypeDeriving #-}
 module ExtendedLambda.Thunk.Base where
 
+import Control.Monad.Trans.Except (throwE)
 import Data.List
 import Control.Monad.State.Class
 import Debug.Trace
@@ -50,7 +51,20 @@ initState = execState initiateThunkState $ ThunkState { thunks = HM.empty
                        , ifFalseTh = undefined
                        , caseL = undefined
                        , caseR = undefined
+                       , redirects = HM.empty
                        }
+
+--getRedirect :: ThunkRef -> NormMonad ThunkState ThunkRef
+getRedirect thRef = HM.lookup thRef <$> gets redirects >>= impl
+  where impl Nothing = lift . lift . throwE $ "getRedirect thRef=" ++ show thRef ++ ": thRef doesn't exist"
+        impl (Just Nothing) = return thRef
+        impl (Just (Just thRef')) = trace' ("Redirecting " ++ show thRef ++ " to " ++ show thRef') $ return thRef'
+
+--setRedirect :: ThunkRef -> ThunkRef -> NormMonad ThunkState ()
+setRedirect oldRef newRef = gets redirects >>= \rs ->
+                              if oldRef `HM.member` rs
+                              then modify (\s -> s { redirects = HM.insert oldRef (Just newRef) rs })
+                              else lift . lift . throwE $ "setRedirect oldRef=" ++ show oldRef ++ " newRef=" ++ show newRef ++ ": oldRef doesn't exist"
 
 initiateThunkState :: MonadState ThunkState m => m ()
 initiateThunkState = do
@@ -169,8 +183,12 @@ getThunkExpr thRef = gets (thExpr . (HM.! thRef) . thunks)
 --newThunk th = ThunkRef <$> freshId' >>= \thRef -> updThunks (HM.insert thRef th { thId = thRef, thCounter = 1 }) >> return thRef
 newThunk th = do thRef <- ThunkRef <$> freshId'
                  th' <- computeThunkFV th
-                 updThunks (HM.insert thRef th' { thId = thRef, thCounter = 1, thNormalized = False })
+                 addThunk thRef th' { thId = thRef, thCounter = 1, thNormalized = False }
                  return thRef
+
+addThunk thRef th = do
+  updThunks (HM.insert thRef th)
+  gets redirects >>= \rs -> modify (\s -> s { redirects = HM.insert thRef Nothing rs })
 
 release :: MonadState ThunkState m => ThunkRef -> m ()
 release thRef = return ()
@@ -178,6 +196,7 @@ release thRef = return ()
 --                                     in if thCounter th == 1
 --                                           then HM.delete thRef ths
 --                                           else HM.insert thRef th { thCounter = thCounter th - 1 } ths
+-- TODO: remove from redirects
 
 obtain :: MonadState ThunkState m => ThunkRef -> m ThunkRef
 obtain thRef = updThunk thRef (\th -> th { thCounter = thCounter th + 1 }) >> return thRef
@@ -194,7 +213,7 @@ convertToThunks (ctx ::= e) = do thId <- ThunkRef <$> freshId'
                                                    , thFree = fv
                                                    , thNormalized = False
                                                    }
-                                 updThunks (HM.insert thId thunk)
+                                 addThunk thId thunk
                                  return thId
 
 convertBase :: MonadState ThunkState m => ExtendedLambdaBase ExtendedLambda -> m (ExtendedLambdaBase ThunkRef)

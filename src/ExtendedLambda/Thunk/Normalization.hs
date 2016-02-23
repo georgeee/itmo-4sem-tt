@@ -29,7 +29,7 @@ normalize :: ThunkRef -> NormMonad ThunkState ThunkRef
 normalize = impl HM.empty
   where impl m _thRef = do
               traceM' $ return $ "Digged to thRef " ++ show _thRef ++ ", within context: " ++ (show m)
-              thRef <- joinCtx m _thRef
+              thRef <- joinCtx m =<< getRedirect _thRef
               if thRef /= _thRef
                  then traceM' $ return $ "Merged contexts, new thRef: " ++ show thRef
                  else return ()
@@ -37,9 +37,13 @@ normalize = impl HM.empty
               if thNormalized th
                  then left thRef
                  else encloseCtx thRef
-                        >> ( (repeatNorm impl' thRef >>= \thRef' -> setNormalized thRef' >> return thRef')
-                                `catchError` \thRef' -> setNormalized thRef' >> left thRef')
-        setNormalized = flip updThunk (\s -> s { thNormalized = True })
+                        >> ( (repeatNorm impl' thRef >>= \thRef' -> handleRes thRef thRef' >> return thRef')
+                                `catchError` \thRef' -> handleRes thRef thRef' >> left thRef')
+        handleRes thRef thRef' = do
+          updThunk thRef' (\s -> s { thNormalized = True })
+          if thRef /= thRef'
+             then setRedirect thRef thRef'
+             else return ()
 
 
         impl' :: ThunkRef -> NormMonad ThunkState ThunkRef
