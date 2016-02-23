@@ -19,7 +19,7 @@ executable tt
   -- other-extensions:    
   build-depends:       base >= 4.7,
                        parsec >= 3.1,
-                       unordered-containers >= 0.2.5,
+                       unordered-containers >= 0.2.6,
                        hashable >= 1.2,
                        mtl >= 2.2,
                        either >= 4.4,

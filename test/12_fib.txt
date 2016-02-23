@@ -3,5 +3,5 @@
         r = PrR p,
         n' = Minus n 1
      in If (Eq n' 0) p (fib n' <r, Plus l r>)
-in PrR (fib n0 <1, 1>)) 15
+in PrR (fib n0 <1, 1>)) 10
                                   

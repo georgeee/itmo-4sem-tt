@@ -14,9 +14,11 @@ import ExtendedLambda.Base
 import Data.Hashable
 import Control.Monad.State.Strict
 
-traceM' :: Monad m => String -> m ()
-traceM' = const (return ())
-trace' x y = y
+traceM' :: Monad m => m String -> m ()
+--traceM' = const $ return ()
+traceM' = (=<<) traceM
+--trace' x y = y
+trace' = trace
 
 newtype ThunkRef = ThunkRef Int
   deriving (Eq, Hashable)
@@ -31,6 +33,7 @@ data Thunk = Thunk { thId :: ThunkRef
                    , thCounter :: Int
                    , thContext :: ThunkContext
                    , thFree :: HS.HashSet Var
+                   , thNormalized :: Bool
                    }
 
 data ThunkState = ThunkState { thunks :: HM.HashMap ThunkRef Thunk
@@ -39,6 +42,7 @@ data ThunkState = ThunkState { thunks :: HM.HashMap ThunkRef Thunk
                              , ifFalseTh :: ThunkRef
                              , caseL :: ThunkRef
                              , caseR :: ThunkRef
+                             , redirects :: HM.HashMap ThunkRef (Maybe ThunkRef)
                              }
 initState = execState initiateThunkState $ ThunkState { thunks = HM.empty
                        , idCounter = 0
@@ -65,18 +69,32 @@ instance CounterBasedState ThunkState where
   counterNext s = let i = idCounter s in (i, s { idCounter = i + 1 })
   counterEmptyState = initState
 
+ctxInnerFV :: MonadState ThunkState m => ThunkContext -> m (HS.HashSet Var)
+ctxInnerFV = foldM (\b a -> HS.union b <$> thFree' a) HS.empty . HM.elems
+
+encloseCtx :: MonadState ThunkState m => ThunkRef -> m ()
+encloseCtx thRef = do
+      th <- getThunk thRef
+      baseFV <- baseToFreeVars $ thExpr th
+      let ctx = thContext th
+      ctx' <- traverse (joinCtx ctx) ctx
+      let ctx'' = HM.intersectionWith (const id) (HS.toMap baseFV) ctx'
+      updThunk thRef (\s -> s { thContext = ctx'' })
+
+
 -- joinCtx doesn't obtain ctx's thRefs (i.e. assuming they're properly obtained already)
 joinCtx :: MonadState ThunkState m => ThunkContext -> ThunkRef -> m ThunkRef
 joinCtx ctx thRef = do
       fv <- thFree' thRef
-      ctxFV <- ctxInnerFV (HM.filterWithKey (\k _ -> k `HS.member` fv) ctx)
-      let ctx' = HM.filterWithKey (\k _ -> k `HS.member` fv || k `HS.member` ctxFV) ctx
+      ctxFV <- ctxInnerFV (HM.intersectionWith (const id) (HS.toMap fv) ctx)
+      let fvMs = HS.toMap $ HS.union ctxFV fv
+          ctx' = HM.intersectionWith (const id) fvMs ctx
       if HM.null ctx'
          then return thRef
          else do
-            s' <- thShowIdent 0 thRef
-            c' <- showLBs 0 ctx'
-            traceM' $ "joinCtx " ++ show c' ++ " " ++ s'
+            traceM' $ do s' <- thShowIdent 0 thRef
+                         c' <- showLBs 0 ctx'
+                         return $ "joinCtx " ++ show c' ++ " " ++ s'
             th <- getThunk thRef
             let l1 = HM.toList ctx'
                 l2 = HM.toList $ thContext th
@@ -135,10 +153,11 @@ thShowIdent i thRef = do th <- getThunk thRef
                          if HM.null bs then ((show thRef ++ ":") ++) <$> thShowIdent' i t else let i' = i + 1 in do
                             lbs <- showLBs i' bs
                             t' <- thShowIdent' i' t
-                            return $ concat [ "\n" ++ (sps $ i * 2) ++ "(let " ++ (intercalate (",\n" ++ (sps $ i * 2 + 4)) lbs)
+                            return $ concat [ (show thRef ++ ":")
+                                            , "\n" ++ (sps $ i * 2) ++ "(let " ++ (intercalate (",\n" ++ (sps $ i * 2 + 4)) lbs)
                                             , "\n" ++ (sps $ i' * 2 - 1) ++ "in " ++ t' ++ ")"
                                             ]
-showLBs i = mapM (\(v, s) -> ((v ++ " = " ++ show s ++ ":") ++) <$> thShowIdent i s) . HM.toList
+showLBs i = mapM (\(v, s) -> ((v ++ " = ") ++) <$> thShowIdent i s) . HM.toList
 
 p i s = (replicate (i*2) ' ') ++ s
 sps = flip replicate ' '
@@ -150,7 +169,7 @@ getThunkExpr thRef = gets (thExpr . (HM.! thRef) . thunks)
 --newThunk th = ThunkRef <$> freshId' >>= \thRef -> updThunks (HM.insert thRef th { thId = thRef, thCounter = 1 }) >> return thRef
 newThunk th = do thRef <- ThunkRef <$> freshId'
                  th' <- computeThunkFV th
-                 updThunks (HM.insert thRef th' { thId = thRef, thCounter = 1 })
+                 updThunks (HM.insert thRef th' { thId = thRef, thCounter = 1, thNormalized = False })
                  return thRef
 
 release :: MonadState ThunkState m => ThunkRef -> m ()
@@ -173,6 +192,7 @@ convertToThunks (ctx ::= e) = do thId <- ThunkRef <$> freshId'
                                                    , thCounter = 1
                                                    , thContext = ctx'
                                                    , thFree = fv
+                                                   , thNormalized = False
                                                    }
                                  updThunks (HM.insert thId thunk)
                                  return thId
@@ -203,9 +223,6 @@ computeThunkFV' base ctx = do
     baseFV <- baseToFreeVars base
     return $ (ctxFV `HS.union` baseFV) `HS.difference` ctxVars
   where ctxVars = HS.fromList $ HM.keys ctx
-
-ctxInnerFV :: MonadState ThunkState m => ThunkContext -> m (HS.HashSet Var)
-ctxInnerFV = foldM (\b a -> HS.union b <$> thFree' a) HS.empty . HM.elems
 
 thFree' thRef = thFree <$> getThunk thRef
 
