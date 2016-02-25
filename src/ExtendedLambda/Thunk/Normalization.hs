@@ -7,7 +7,7 @@ import ExtendedLambda.Thunk.Base
 import Control.Monad.State.Class
 import Data.Foldable
 import Common
-import Control.Monad.Error.Class
+import Control.Monad.Error.Class (catchError)
 import Control.Monad.Trans.Either
 import qualified "unordered-containers" Data.HashMap.Strict as HM
 import ExtendedLambda.Types
@@ -28,26 +28,18 @@ testThunkNormalize s = let res = runNormMonadSt chain
 normalize :: ThunkRef -> NormMonad ThunkState ThunkRef
 normalize = impl HM.empty
   where impl m _thRef = do
-              traceM' $ return $ "Digged to thRef " ++ show _thRef ++ ", within context: " ++ (show m)
-              thRef <- joinCtx m =<< getRedirect _thRef
-              if thRef /= _thRef
-                 then traceM' $ return $ "Merged contexts, new thRef: " ++ show thRef
-                 else return ()
-              th <- getThunk thRef
-              if thNormalized th
-                 then left thRef
-                 else encloseCtx thRef
-                        >> ( (repeatNorm impl' thRef >>= \thRef' -> handleRes thRef thRef' >> return thRef')
-                                `catchError` \thRef' -> handleRes thRef thRef' >> left thRef')
-        handleRes thRef thRef' = do
-          updThunk thRef' (\s -> s { thNormalized = True })
-          if thRef /= thRef'
-             then setRedirect thRef thRef'
-             else return ()
-
+            traceM' $ return $ "Digged to thRef " ++ show _thRef ++ ", within context: " ++ (show m)
+            _thRef' <- joinCtx m =<< getCached _thRef
+            if _thRef' /= _thRef
+               then traceM' $ return $ "Merged contexts, new thRef: " ++ show _thRef'
+               else return ()
+            repeatNorm (withCache impl') _thRef'
 
         impl' :: ThunkRef -> NormMonad ThunkState ThunkRef
         impl' thRef = do
+              encloseCtx thRef
+              propagateCtx thRef
+              propagateCached thRef
               traceM' $ thShowIdent 0 thRef >>= return . (++) "Traversing to expr = "
               th <- getThunk thRef
               let ctx = thContext th
@@ -60,8 +52,10 @@ normalize = impl HM.empty
                           in case v `HM.lookup` ctx of
                                Just varRef -> substVar varRef
                                _ -> left thRef
-                  pTh :@ qTh -> do p <- getThunkExpr pTh
-                                   q <- getThunkExpr qTh
+                  pTh :@ qTh -> do propagateCached pTh
+                                   propagateCached qTh
+                                   p <- thExpr <$> getThunk pTh
+                                   q <- thExpr <$> getThunk qTh
                                    pCtx <- thContext <$> getThunk pTh
                                    qCtx <- thContext <$> getThunk qTh
                                    let digLeft = trace' "digLeft" $ dig alterLeft pTh
@@ -102,14 +96,14 @@ normalize = impl HM.empty
                                      (Abs v s) -> do release pTh
                                                      release thRef
                                                      qTh' <- joinCtx ctx qTh
-                                                     traceM' $ return . ("qTh' " ++) =<< thShowIdent 0 qTh'
                                                      joinCtx ctx =<< joinCtx (HM.singleton v qTh') =<< joinCtx pCtx s
                                      Y -> do restTh <- newThunk th { thContext = HM.empty }
                                              obtain qTh
                                              updThunk thRef (\s -> s { thExpr = qTh :@ restTh })
                                              return thRef
                                      Case -> case q of
-                                              qlTh :@ qrTh -> do ql <- getThunkExpr qlTh
+                                              qlTh :@ qrTh -> do propagateCached qlTh
+                                                                 ql <- thExpr <$> getThunk qlTh
                                                                  case ql of
                                                                    InL -> do release pTh
                                                                              release qTh
@@ -125,8 +119,10 @@ normalize = impl HM.empty
                                                                              return thRef
                                                                    _ -> digRight
                                               _ -> digRight
-                                     plTh :@ prTh -> do pl <- getThunkExpr plTh
-                                                        pr <- getThunkExpr prTh
+                                     plTh :@ prTh -> do propagateCached plTh
+                                                        propagateCached prTh
+                                                        pl <- thExpr <$> getThunk plTh
+                                                        pr <- thExpr <$> getThunk prTh
                                                         case (pl, pr, q) of
                                                          (IOp op, I i, I j) -> do
                                                            release pTh
