@@ -18,10 +18,10 @@ import Data.Hashable
 import Control.Monad.State.Strict
 
 traceM' :: Monad m => m String -> m ()
---traceM' = const $ return ()
---trace' x y = y
-traceM' = (=<<) traceM
-trace' = trace
+traceM' = const $ return ()
+trace' x y = y
+--traceM' = (=<<) traceM
+--trace' = trace
 
 newtype ThunkRef = ThunkRef Int
   deriving (Eq, Hashable)
@@ -78,8 +78,8 @@ withCache action thRef = logStepping thRef >> thNormalized' thRef >>= impl1
         logStepping thRef = trace' ("-- stepping into " ++ show thRef) $ return thRef
         logRepeatting thRef = trace' ("-- repeatting " ++ show thRef) $ return thRef
         --action' - action, executed repeatedly with same thRef (till first left)
-        action' = action >=> toRight . action''
-        action'' = action >=> \thRef' -> logRepeatting thRef' >> action' thRef'
+        action' thRef = action thRef >>= toRight . action'' thRef
+        action'' thRef = setThNormalized thRef >=> \thRef' -> action thRef' >>= logRepeatting >>= action'' thRef'
 
 
 initiateThunkState :: MonadState ThunkState m => m ()

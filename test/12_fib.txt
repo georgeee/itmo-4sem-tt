@@ -1,7 +1,9 @@
 (\n0 -> let fib = \n . \p .
     let l = PrL p,
         r = PrR p,
-        n' = Minus n 1
-     in If (Eq n' 0) p (fib n' <r, Plus l r>)
-in PrR (fib n0 <1, 1>)) 7
+        n' = Minus n 1,
+        s = Plus l r,
+        n'' = Plus n' (If (Eq s 0) 0 0)
+     in If (Eq n'' 0) p (fib n' <r, s>)
+in PrR (fib n0 <1, 1>)) 95
                                   
