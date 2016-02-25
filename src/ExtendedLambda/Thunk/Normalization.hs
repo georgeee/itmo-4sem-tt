@@ -46,8 +46,7 @@ normalize = impl HM.empty
               case thExpr th of
                   V v -> let substVar varRef = do
                                 traceM' $ return . (("Substituting to var " ++ v ++ ": ") ++) =<< thShowIdent 0 varRef
-                                varRef' <- obtain varRef >>= joinCtx ctx
-                                release thRef
+                                varRef' <- joinCtx ctx varRef
                                 return varRef'
                           in case v `HM.lookup` ctx of
                                Just varRef -> substVar varRef
@@ -70,53 +69,36 @@ normalize = impl HM.empty
                                      IOp _ -> digRight
                                      OrdOp _ -> digRight
                                      If -> case q of
-                                             (B b) -> do release pTh
-                                                         release qTh
-                                                         release thRef
-                                                         obtain =<< if b
-                                                                       then gets ifTrueTh
-                                                                       else gets ifFalseTh
+                                             (B b) -> if b
+                                                         then gets ifTrueTh
+                                                         else gets ifFalseTh
                                              _ -> digRight
                                      PrL -> case q of
                                               aTh :~ bTh -> do
-                                                release pTh
-                                                release qTh
-                                                release bTh
-                                                release thRef
                                                 joinCtx ctx =<< joinCtx qCtx aTh
                                               _ -> digRight
                                      PrR -> case q of
                                               aTh :~ bTh -> do
-                                                release pTh
-                                                release qTh
-                                                release aTh
-                                                release thRef
                                                 joinCtx ctx =<< joinCtx qCtx bTh
                                               _ -> digRight
-                                     (Abs v s) -> do release pTh
-                                                     release thRef
-                                                     qTh' <- joinCtx ctx qTh
-                                                     joinCtx ctx =<< joinCtx (HM.singleton v qTh') =<< joinCtx pCtx s
+                                     (Abs v s) -> do
+                                          qTh' <- joinCtx ctx qTh
+                                          joinCtx ctx =<< joinCtx (HM.singleton v qTh') =<< joinCtx pCtx s
                                      Y -> do restTh <- newThunk th { thContext = HM.empty }
-                                             obtain qTh
                                              updThunk thRef (\s -> s { thExpr = qTh :@ restTh })
                                              return thRef
                                      Case -> case q of
                                               qlTh :@ qrTh -> do propagateCached qlTh
                                                                  ql <- thExpr <$> getThunk qlTh
                                                                  case ql of
-                                                                   InL -> do release pTh
-                                                                             release qTh
-                                                                             release qlTh
-                                                                             cL <- obtain =<< gets caseL
-                                                                             updThunk thRef (\s -> s { thExpr = cL :@ qrTh })
-                                                                             return thRef
-                                                                   InR -> do release pTh
-                                                                             release qTh
-                                                                             release qlTh
-                                                                             cR <- obtain =<< gets caseR
-                                                                             updThunk thRef (\s -> s { thExpr = cR :@ qrTh })
-                                                                             return thRef
+                                                                   InL -> do
+                                                                      cL <- gets caseL
+                                                                      updThunk thRef (\s -> s { thExpr = cL :@ qrTh })
+                                                                      return thRef
+                                                                   InR -> do
+                                                                      cR <- gets caseR
+                                                                      updThunk thRef (\s -> s { thExpr = cR :@ qrTh })
+                                                                      return thRef
                                                                    _ -> digRight
                                               _ -> digRight
                                      plTh :@ prTh -> do propagateCached plTh
@@ -125,19 +107,11 @@ normalize = impl HM.empty
                                                         pr <- thExpr <$> getThunk prTh
                                                         case (pl, pr, q) of
                                                          (IOp op, I i, I j) -> do
-                                                           release pTh
-                                                           release qTh
-                                                           release plTh
-                                                           release prTh
                                                            updThunk thRef (\s -> s { thExpr = I (iop op i j)
                                                                                    , thContext = HM.empty })
                                                            return thRef
                                                          (IOp _, I _, _) -> digRight
                                                          (OrdOp op, I i, I j) -> do
-                                                           release pTh
-                                                           release qTh
-                                                           release plTh
-                                                           release prTh
                                                            updThunk thRef (\s -> s { thExpr = B (ordOp op i j)
                                                                                    , thContext = HM.empty })
                                                            return thRef

@@ -34,7 +34,8 @@ instance CounterBasedState Int where
   counterNext a = (a, a + 1)
   counterEmptyState = 0
 
-type NormMonad s a = EitherT a (StateT s (Except String)) a
+type NormMonadSt st s a = EitherT a (st s (Except String)) a
+type NormMonad s a = NormMonadSt StateT s a
 
 oneOf :: (Monad m) => (a -> a -> a) -> EitherT a m a -> EitherT a m a -> EitherT a m a
 oneOf b l r = (l >>= \l' -> b l' <$> toRight r) `catchError` (\l' -> (b l' <$> r) `catchError` (left . b l'))
