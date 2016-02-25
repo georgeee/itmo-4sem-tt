@@ -187,10 +187,13 @@ thShowIdent' i (l :@ r) = let i' = i + 1 in do
                         l' <- thShowIdent i' l
                         r' <- show' i' r
                         return $ l' ++ " " ++ r'
-  where show' i r = do el <- thExpr <$> getThunk r
-                       case el of
-                         (_ :@ _) -> (\x -> "(" ++ x ++ ")") <$> thShowIdent i r
-                         _ -> thShowIdent i r
+  where
+    show' :: MonadThunkState ThunkState ThunkRef m => Int -> ThunkRef -> m String
+    show' i r = do
+        el <- thExpr <$> getThunk r
+        case el of
+            (_ :@ _) -> (\x -> "(" ++ x ++ ")") <$> thShowIdent i r
+            _ -> thShowIdent i r
 thShowIdent' _ (V v) = return v
 
 thShowIdent :: MonadThunkState ThunkState ThunkRef m => Int -> ThunkRef -> m String
@@ -266,10 +269,12 @@ computeThunkFV' base ctx = do
 propagateCached :: MonadThunkState ThunkState ThunkRef m => ThunkRef -> m ()
 propagateCached thRef = thExpr <$> getThunk thRef >>= impl >>= \b -> updThunk thRef (\s -> s { thExpr = b })
   where
+    impl :: MonadThunkState ThunkState ThunkRef m => ExtendedLambdaBase ThunkRef -> m (ExtendedLambdaBase ThunkRef)
     impl (l :~ r) = impl2 l r (:~)
     impl (l :@ r) = impl2 l r (:@)
     impl (Abs v e) = Abs v <$> getCached e
     impl e = return e
+    impl2 :: MonadThunkState ThunkState ThunkRef m => ThunkRef -> ThunkRef -> (ThunkRef -> ThunkRef -> ExtendedLambdaBase ThunkRef) -> m (ExtendedLambdaBase ThunkRef)
     impl2 l r f = f <$> getCached l <*> getCached r
 
 thFree' :: MonadThunkState ThunkState ThunkRef m => ThunkRef -> m (HS.HashSet Var)
