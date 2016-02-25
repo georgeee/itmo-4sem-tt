@@ -57,6 +57,8 @@ initState = execState initiateThunkState $ ThunkState { thunks = HM.empty
 thNormalized' :: MonadState ThunkState m => ThunkRef -> m (Maybe ThunkRef)
 thNormalized' = fmap thNormalized . getThunk
 
+-- set thRef' as normalized for thRef, returns thRef'
+setThNormalized :: MonadState ThunkState m => ThunkRef -> ThunkRef -> m ThunkRef
 setThNormalized thRef thRef' = do
      updThunk thRef (\s -> s { thNormalized = Just thRef' })
      traceM' $ (++) ("-- " ++ show thRef ++ " normalized to ") <$> thShowIdent 0 thRef'
@@ -67,13 +69,18 @@ getCached thRef = maybe thRef id <$> thNormalized' thRef
 
 withCache :: (ThunkRef -> NormMonad ThunkState ThunkRef) -> ThunkRef -> NormMonad ThunkState ThunkRef
 withCache action thRef = logStepping thRef >> thNormalized' thRef >>= impl1
-  where impl1 Nothing = (action thRef >>= setThNormalized thRef) `catchError` (setThNormalized thRef >=> left)
+  where impl1 Nothing = action' thRef `catchError` (setThNormalized thRef >=> left)
         impl1 (Just thRef') = if thRef == thRef'
                                  then trace' ("-- " ++ show thRef ++ " already normalized ") $ left thRef
                                  else impl2 thRef' >>= setThNormalized thRef
         impl2 thRef' = logStepping thRef' >> thNormalized' thRef' >>= impl3 >>= setThNormalized thRef'
-            where impl3 = maybe (action thRef' `catchError` return) impl2
-        logStepping thRef = trace' ("Stepping into " ++ show thRef) $ return thRef
+            where impl3 = maybe (action' thRef' `catchError` return) impl2
+        logStepping thRef = trace' ("-- stepping into " ++ show thRef) $ return thRef
+        logRepeatting thRef = trace' ("-- repeatting " ++ show thRef) $ return thRef
+        --action' - action, executed repeatedly with same thRef (till first left)
+        action' = action >=> toRight . action''
+        action'' = action >=> \thRef' -> logRepeatting thRef' >> action' thRef'
+
 
 initiateThunkState :: MonadState ThunkState m => m ()
 initiateThunkState = do

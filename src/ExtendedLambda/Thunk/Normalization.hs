@@ -65,7 +65,7 @@ normalize = impl HM.empty
                                        dig alter comp = (impl ctx comp >>= alter)
                                             `catchError` \comp' -> if comp == comp'
                                                                       then left thRef
-                                                                      else alter comp' >>= left
+                                                                      else alter comp'
                                    case p of
                                      IOp _ -> digRight
                                      OrdOp _ -> digRight
