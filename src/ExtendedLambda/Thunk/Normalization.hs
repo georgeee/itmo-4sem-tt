@@ -36,7 +36,7 @@ normalize = \r -> createBasics >>= flip bImpl r
           where
            impl m _thRef = do
                traceM' $ return $ "Digged to thRef " ++ show _thRef ++ ", within context: " ++ (show m)
-               _thRef' <- joinCtx m =<< getCached _thRef
+               _thRef' <- trace' "@@ 0" . joinCtx m =<< getCached _thRef
                if _thRef' /= _thRef
                   then traceM' $ return $ "Merged contexts, new thRef: " ++ show _thRef'
                   else return ()
@@ -53,7 +53,7 @@ normalize = \r -> createBasics >>= flip bImpl r
                  case thExpr th of
                      V v -> let substVar varRef = do
                                    traceM' $ return . (("Substituting to var " ++ v ++ ": ") ++) =<< thShowIdent 0 varRef
-                                   varRef' <- joinCtx ctx varRef
+                                   varRef' <- trace' "@@ 1" $ joinCtx ctx varRef
                                    return varRef'
                              in case v `HM.lookup` ctx of
                                   Just varRef -> substVar varRef
@@ -82,15 +82,15 @@ normalize = \r -> createBasics >>= flip bImpl r
                                                 _ -> digRight
                                         PrL -> case q of
                                                  aTh :~ bTh -> do
-                                                   joinCtx ctx =<< joinCtx qCtx aTh
+                                                   trace' "@@ 2" . joinCtx ctx =<< trace' "@@ 3" (joinCtx qCtx aTh)
                                                  _ -> digRight
                                         PrR -> case q of
                                                  aTh :~ bTh -> do
-                                                   joinCtx ctx =<< joinCtx qCtx bTh
+                                                   trace' "@@ 4" . joinCtx ctx =<< trace' "@@ 5" (joinCtx qCtx bTh)
                                                  _ -> digRight
                                         (Abs v s) -> do
-                                             qTh' <- joinCtx ctx qTh
-                                             joinCtx ctx =<< joinCtx (HM.singleton v qTh') =<< joinCtx pCtx s
+                                             qTh' <- trace' "@@ 6" $ joinCtx ctx qTh
+                                             trace' "@@ 7" . joinCtx ctx =<< trace' "@@ 8" . joinCtx (HM.singleton v qTh') =<< trace' "@@ 9" ( joinCtx pCtx s)
                                         Y -> do restTh <- newThunk th { thContext = HM.empty }
                                                 updThunk thRef (\s -> s { thExpr = qTh :@ restTh })
                                                 return thRef

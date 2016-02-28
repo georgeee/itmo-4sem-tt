@@ -149,7 +149,7 @@ joinCtx ctx thRef = do
             let l1 = HM.toList ctx'
                 l2 = HM.toList $ thContext th
             newCtx <- HM.fromList <$> normalizeCtx HS.empty HM.empty (reverse $ l1 ++ l2)
-            newThunk $ th { thContext = newCtx }
+            trace' "Exitting joinCtx" $ newThunk $ th { thContext = newCtx }
 
 normalizeCtx :: MonadThunkState ref m => HS.HashSet Var -> ThunkContext ref -> [(Var, ref)] -> m [(Var, ref)]
 normalizeCtx _ rCtx [] = return []
