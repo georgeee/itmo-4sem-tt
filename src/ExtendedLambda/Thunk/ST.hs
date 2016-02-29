@@ -1,9 +1,9 @@
 {-# LANGUAGE PackageImports, FlexibleContexts, FlexibleInstances, FunctionalDependencies,
-    MultiParamTypeClasses, GeneralizedNewtypeDeriving #-}
+    MultiParamTypeClasses, GeneralizedNewtypeDeriving, Rank2Types #-}
 module ExtendedLambda.Thunk.ST where
 
 import Control.Monad.Trans.Reader
-import Control.Monad.Trans.State
+import Control.Monad.Trans.State.Strict
 import Control.Monad.ST.Trans
 import Control.Monad.Trans.Class
 import Control.Monad.Error.Class (catchError)
@@ -30,12 +30,17 @@ instance Eq (ThunkRef s) where
 instance Show (ThunkRef s) where
   show x = "#" ++ show (trId x)
 
-type ThunkSTT s m = StateT Int (STT s (ReaderT (STRef s Int) m))
+type ThunkSTT s m = ReaderT (STRef s Int) (STT s m)
 
 instance Monad m => MonadThunkId (ThunkSTT s m) where
-  nextThunkId = lift $ lift ask >>= \r -> readSTRef r >>= \c -> writeSTRef r (c + 1) >> return c
+  nextThunkId = ask >>= \r -> lift (readSTRef r) >>= \c -> lift (writeSTRef r (c + 1)) >> return c
 
 instance Monad m => MonadThunkState (ThunkRef s) (ThunkSTT s m) where
   updThunk (ThunkRef r _) f = lift $ readSTRef r >>= writeSTRef r . f
   addThunk th = lift $ flip ThunkRef (thId th) <$> newSTRef th
   getThunk (ThunkRef r _) = lift $ readSTRef r
+
+evalThunkSTT :: Monad m => (forall s. ThunkSTT s m a) -> m a
+evalThunkSTT m = runST $ runReaderT m =<< newSTRef 0
+
+

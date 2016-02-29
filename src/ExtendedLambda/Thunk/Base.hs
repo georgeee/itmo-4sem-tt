@@ -1,10 +1,10 @@
-{-# LANGUAGE PackageImports, FlexibleContexts, FlexibleInstances, FunctionalDependencies,
+{-# LANGUAGE PackageImports, FlexibleContexts, FlexibleInstances, FunctionalDependencies, UndecidableInstances, BangPatterns,
     MultiParamTypeClasses, GeneralizedNewtypeDeriving #-}
 module ExtendedLambda.Thunk.Base where
 
 import Control.Monad.Trans.Reader (ReaderT, runReaderT)
-import Control.Monad.Error.Class (catchError)
-import Control.Monad.Trans.Either (left, EitherT)
+import Control.Monad.Trans.Either (EitherT)
+import qualified Control.Monad.Trans.Either as ET
 import Control.Monad.Trans.Except (throwE)
 import Control.Monad.Trans.Class (lift)
 import Data.List
@@ -24,6 +24,18 @@ trace' x y = y
 --traceM' = (=<<) traceM
 --trace' = trace
 
+left :: Monad m => a -> m (Either a b)
+left = return . Left
+
+right :: Monad m => b -> m (Either a b)
+right = return . Right
+
+repeatNorm' :: Monad m => (b -> m (Either b b)) -> b -> m (Either b b)
+repeatNorm' m = m >=> either left (toRight' . repeatNorm' m)
+
+toRight' :: Monad m => m (Either a a) -> m (Either a a)
+toRight' ma = ma >>= either right right
+
 type ThunkContext ref = HM.HashMap Var ref
 
 type ThunkId = Int
@@ -38,17 +50,17 @@ data Thunk ref = Thunk { thId :: ThunkId
 class Monad m => MonadThunkId m where
   nextThunkId :: m ThunkId
 
-class (MonadThunkId m, Show ref, Eq ref) => MonadThunkState ref m where
+class (MonadThunkId m, Show ref, Eq ref) => MonadThunkState ref m | m -> ref where
   updThunk :: ref -> (Thunk ref -> Thunk ref) -> m ()
   addThunk :: Thunk ref -> m ref
   getThunk :: ref -> m (Thunk ref)
 
-instance MonadThunkId m => MonadThunkId (ReaderT a m) where
-  nextThunkId = lift nextThunkId
-instance MonadThunkState ref m => MonadThunkState ref (ReaderT a m) where
-  getThunk = lift . getThunk
-  updThunk r = lift . updThunk r
-  addThunk = lift . addThunk
+--instance MonadThunkId m => MonadThunkId (ReaderT a m) where
+--  nextThunkId = lift nextThunkId
+--instance MonadThunkState ref m => MonadThunkState ref (ReaderT a m) where
+--  getThunk = lift . getThunk
+--  updThunk r = lift . updThunk r
+--  addThunk = lift . addThunk
 instance MonadThunkId m => MonadThunkId (EitherT a m) where
   nextThunkId = lift nextThunkId
 instance MonadThunkState ref m => MonadThunkState ref (EitherT a m) where
@@ -57,9 +69,10 @@ instance MonadThunkState ref m => MonadThunkState ref (EitherT a m) where
   addThunk = lift . addThunk
 
 newThunk :: MonadThunkState ref m => Thunk ref -> m ref
-newThunk th = do thId <- nextThunkId
-                 th' <- computeThunkFV th
-                 addThunk th' { thId = thId, thNormalized = Nothing }
+newThunk !th = do
+  thId <- nextThunkId
+  th' <- computeThunkFV th
+  addThunk th' { thId = thId, thNormalized = Nothing }
 
 
 thNormalized' :: MonadThunkState ref m => ref -> m (Maybe ref)
@@ -67,27 +80,47 @@ thNormalized' = fmap thNormalized . getThunk
 
 -- set thRef' as normalized for thRef, returns thRef'
 setThNormalized :: MonadThunkState ref m => ref -> ref -> m ref
-setThNormalized thRef thRef' = do
+setThNormalized !thRef !thRef' = do
      updThunk thRef (\s -> s { thNormalized = Just thRef' })
      traceM' $ (++) ("-- " ++ show thRef ++ " normalized to ") <$> thShowIdent 0 thRef'
      return thRef'
 
 getCached :: MonadThunkState ref m => ref -> m ref
-getCached thRef = maybe thRef id <$> thNormalized' thRef
+getCached !thRef = maybe thRef id <$> thNormalized' thRef
 
-withCache :: (MonadThunkState ref n) => (ref -> EitherT ref n ref) -> ref -> EitherT ref n ref
-withCache action thRef = logStepping thRef >> thNormalized' thRef >>= impl1
-  where impl1 Nothing = action' thRef `catchError` (setThNormalized thRef >=> left)
+
+whenRight' :: Monad m => (a -> m (Either a a)) -> Either a a -> m (Either a a)
+whenRight' = either left
+
+whenRight ma = either left (ma >=> right)
+whenLeft ma = either (ma >=> left) right
+
+--withCache :: (MonadThunkState ref n) => (ref -> n ref) -> ref -> n ref
+--withCache action thRef = logStepping thRef >> thNormalized' thRef >>= impl1
+--  where impl1 Nothing = action' thRef `catchLeft` (setThNormalized thRef >=> left)
+--        impl1 (Just thRef') = if thRef == thRef'
+--                                 then trace' ("-- " ++ show thRef ++ " already normalized ") $ left thRef
+--                                 else impl2 thRef' >>= setThNormalized thRef
+--        impl2 thRef' = logStepping thRef' >> thNormalized' thRef' >>= impl3 >>= setThNormalized thRef'
+--            where impl3 = maybe (action' thRef' `catchLeft` return) impl2
+--        logStepping thRef = trace' ("-- stepping into " ++ show thRef) $ return thRef
+--        logRepeatting thRef = trace' ("-- repeatting " ++ show thRef) $ return thRef
+--        --action' - action, executed repeatedly with same thRef (till first left)
+--        action' thRef = action thRef >>= toRight . action'' thRef
+--        action'' thRef = setThNormalized thRef >=> \thRef' -> action thRef' >>= logRepeatting >>= action'' thRef'
+withCache :: (MonadThunkState ref n) => (ref -> n (Either ref ref)) -> ref -> n (Either ref ref)
+withCache action !thRef = logStepping thRef >> thNormalized' thRef >>= impl1
+  where impl1 Nothing = action' thRef >>= whenLeft (setThNormalized thRef)
         impl1 (Just thRef') = if thRef == thRef'
                                  then trace' ("-- " ++ show thRef ++ " already normalized ") $ left thRef
-                                 else impl2 thRef' >>= setThNormalized thRef
-        impl2 thRef' = logStepping thRef' >> thNormalized' thRef' >>= impl3 >>= setThNormalized thRef'
-            where impl3 = maybe (action' thRef' `catchError` return) impl2
+                                 else impl2 thRef' >>= whenRight (setThNormalized thRef)
+        impl2 thRef' = logStepping thRef' >> thNormalized' thRef' >>= impl3 >>= whenRight (setThNormalized thRef')
+            where impl3 = maybe (toRight' $ action' thRef') impl2
         logStepping thRef = trace' ("-- stepping into " ++ show thRef) $ return thRef
         logRepeatting thRef = trace' ("-- repeatting " ++ show thRef) $ return thRef
         --action' - action, executed repeatedly with same thRef (till first left)
-        action' thRef = action thRef >>= toRight . action'' thRef
-        action'' thRef = setThNormalized thRef >=> \thRef' -> action thRef' >>= logRepeatting >>= action'' thRef'
+        action' thRef = action thRef >>= whenRight' (toRight' . action'' thRef)
+        action'' thRef = setThNormalized thRef >=> \thRef' -> action thRef' >>= whenRight' (logRepeatting >=> action'' thRef')
 
 
 
@@ -95,7 +128,7 @@ ctxInnerFV :: MonadThunkState ref m => ThunkContext ref -> m (HS.HashSet Var)
 ctxInnerFV = foldM (\b a -> HS.union b <$> thFree' a) HS.empty . HM.elems
 
 encloseCtx :: MonadThunkState ref m => ref -> m ()
-encloseCtx thRef = do
+encloseCtx !thRef = do
       th <- getThunk thRef
       baseFV <- baseToFreeVars $ thExpr th
       let ctx = thContext th
@@ -105,7 +138,7 @@ encloseCtx thRef = do
 
 -- thRef's ctx entries are assummed to be enclosed
 propagateCtx :: MonadThunkState ref m => ref -> m ()
-propagateCtx thRef = do
+propagateCtx !thRef = do
   th <- getThunk thRef
   base' <- propagateCtxToBase (thContext th) (thExpr th)
   case base' of
@@ -113,7 +146,7 @@ propagateCtx thRef = do
     _ -> return ()
 
 joinCtx :: MonadThunkState ref m => ThunkContext ref -> ref -> m ref
-joinCtx ctx thRef = do
+joinCtx !ctx !thRef = do
       fv <- thFree' thRef
       ctxFV <- ctxInnerFV (HM.intersectionWith (const id) (HS.toMap fv) ctx)
       let fvMs = HS.toMap $ HS.union ctxFV fv
@@ -193,6 +226,29 @@ showLBs i = mapM (\(v, s) -> ((v ++ " = ") ++) <$> thShowIdent i s) . HM.toList
 p i s = (replicate (i*2) ' ') ++ s
 sps = flip replicate ' '
 
+convertFromThunks :: MonadThunkState ref m => ref -> m ExtendedLambda
+convertFromThunks = getThunk >=> impl1
+  where
+    impl1 :: MonadThunkState ref m => Thunk ref -> m ExtendedLambda
+    impl1 Thunk { thExpr = base , thContext = ctx } = (::=) <$> convertCtx ctx <*> convertBase base
+    convertCtx :: MonadThunkState ref m => (HM.HashMap Var ref) -> m ELContext
+    convertCtx ctx = LHM.fromList <$> mapM (\(v, e) -> (,) v <$> convertFromThunks e) (HM.toList ctx)
+    convertBase :: MonadThunkState ref m => (ExtendedLambdaBase ref) -> m (ExtendedLambdaBase ExtendedLambda)
+    convertBase (I i) = return $ I i
+    convertBase (B b) = return $ B b
+    convertBase Y = return $ Y
+    convertBase PrL = return $ PrL
+    convertBase PrR = return $ PrR
+    convertBase InL = return $ InL
+    convertBase InR = return $ InR
+    convertBase Case = return $ Case
+    convertBase If = return $ If
+    convertBase (IOp op) = return $ IOp op
+    convertBase (OrdOp ord) = return $ OrdOp ord
+    convertBase (l :~ r) = (:~) <$> convertFromThunks l <*> convertFromThunks r
+    convertBase (l :@ r) = (:@) <$> convertFromThunks l <*> convertFromThunks r
+    convertBase (Abs v e) = Abs v <$> convertFromThunks e
+    convertBase (V v) = return $ V v
 
 convertToThunks :: MonadThunkState ref m => ExtendedLambda -> m ref
 convertToThunks (ctx ::= e) = do thId <- nextThunkId
@@ -235,7 +291,7 @@ computeThunkFV' base ctx = do
   where ctxVars = HS.fromList $ HM.keys ctx
 
 propagateCached :: MonadThunkState ref m => ref -> m ()
-propagateCached thRef = thExpr <$> getThunk thRef >>= impl >>= \b -> updThunk thRef (\s -> s { thExpr = b })
+propagateCached !thRef = thExpr <$> getThunk thRef >>= impl >>= \b -> updThunk thRef (\s -> s { thExpr = b })
   where
     impl :: MonadThunkState ref m => ExtendedLambdaBase ref -> m (ExtendedLambdaBase ref)
     impl (l :~ r) = impl2 l r (:~)
@@ -246,13 +302,13 @@ propagateCached thRef = thExpr <$> getThunk thRef >>= impl >>= \b -> updThunk th
     impl2 l r f = f <$> getCached l <*> getCached r
 
 thFree' :: MonadThunkState ref m => ref -> m (HS.HashSet Var)
-thFree' thRef = thFree <$> getThunk thRef
+thFree' !thRef = thFree <$> getThunk thRef
 
 -- ctx entries are assummed to be enclosed
 propagateCtxToBase :: MonadThunkState ref m => ThunkContext ref -> ExtendedLambdaBase ref -> m (Maybe (ExtendedLambdaBase ref))
-propagateCtxToBase ctx (l :~ r)  = Just <$> ( (:~) <$> joinCtx ctx l <*> joinCtx ctx r )
-propagateCtxToBase ctx (l :@ r)  = Just <$> ( (:@) <$> joinCtx ctx l <*> joinCtx ctx r )
-propagateCtxToBase ctx (Abs v e) = Just <$> ( Abs v <$> joinCtx (HM.delete v ctx) e    )
+propagateCtxToBase !ctx (l :~ r)  = Just <$> ( (:~) <$> joinCtx ctx l <*> joinCtx ctx r )
+propagateCtxToBase !ctx (l :@ r)  = Just <$> ( (:@) <$> joinCtx ctx l <*> joinCtx ctx r )
+propagateCtxToBase !ctx (Abs v e) = Just <$> ( Abs v <$> joinCtx (HM.delete v ctx) e    )
 propagateCtxToBase _ _ = return Nothing
 
 baseToFreeVars :: MonadThunkState ref m => ExtendedLambdaBase ref -> m (HS.HashSet Var)

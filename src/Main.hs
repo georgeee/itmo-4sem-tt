@@ -4,6 +4,9 @@ import Text.Parsec
 import Control.Monad.State.Strict
 import Control.Monad.Trans.Either
 import ExtendedLambda.Base
+import ExtendedLambda.Types
+import ExtendedLambda.Thunk.Normalization
+import ExtendedLambda.Thunk.ST
 import ExtendedLambda.AlgorithmW as EL
 import System.Console.GetOpt
 import UntypedLambda as UL
@@ -52,7 +55,10 @@ fullReader opts algo = case optInput opts of
                          Nothing -> getContents >>= algo >>= putStrLn
 
 basicRunner :: BasicRW -> Options -> (Parsec String () b) -> (b -> String) -> IO ()
-basicRunner rw opts parser f = rw opts $ return . either (("Error: " ++) . show) f . parse (spaces >> parser) ""
+basicRunner rw opts parser f = basicRunner' rw opts parser () $ \x y -> f x
+
+basicRunner' :: BasicRW -> Options -> (Parsec String u b) -> u -> (b -> u -> String) -> IO ()
+basicRunner' rw opts parser u f = rw opts $ return . either (("Error: " ++) . show) (uncurry f) . (runParser (spaces >> (,) <$> parser <*> getState) u "")
 
 perLine = basicRunner multilineReader
 full = basicRunner fullReader
@@ -66,14 +72,22 @@ main = do
     1 -> perLine opts ulParse showUlWithParens
     2 -> perLine opts ulParse $ show . sort . HS.toList . UL.freeVars
     3 -> perLine opts sParse $ either (++ " isn't free for substitution") show . performSubst
-    4 -> perLine opts ulParse $ show . normalize
+    4 -> perLine opts ulParse $ show . UL.normalize
     -1 -> perLine opts ulParse $ show . prettify . convertToSKI
     5 -> perLine opts ulParse $ show . convertToSKI
     6 -> full opts eqsParse $ showUnifyResult . unify
     7 -> perLine opts ulParse $ showSTResult . STL.findType
-    13 -> fullReader opts $ \s -> return $ either ("Error " ++) id $ (\(t,e) -> show t ++ "\n" ++ show e) <$> evalState (runEitherT $ testElParseSt s >>= normalizeRecursion >>= EL.findType) 0
+    8 -> basicRunner' fullReader opts elParse 0 $ elNorm normalizeST
+    -8 -> basicRunner' fullReader opts elParse 0 $ elNorm normalizeSt
+    9 -> basicRunner' fullReader opts elParse 0 algoW
 
-showSTResult (Left e) = "Lamda has no type, failed on equation " ++ (show e)
+elNorm :: (ExtendedLambda -> Int -> Either String (Either ExtendedLambda ExtendedLambda)) -> ExtendedLambda -> Int -> String
+elNorm norm e st = either ("Error " ++) show $ norm e st
+
+algoW :: ExtendedLambda -> Int -> String
+algoW e st = either ("Error " ++) id $ (\(t,e) -> show t ++ "\n" ++ show e) <$> evalState (runEitherT $ normalizeRecursion e >>= EL.findType) st
+
+showSTResult (Left e) = "Lambda has no type, failed on equation " ++ (show e)
 showSTResult (Right (l, t, m)) = (show l) ++ " :: " ++ (show t) ++ "\nContext:\n" ++ (showMap " :: " m)
 
 showUnifyResult (Left e) = "System is inconsistent, stopped on equation: " ++ (show e)
