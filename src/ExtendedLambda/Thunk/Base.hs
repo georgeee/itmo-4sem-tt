@@ -19,10 +19,10 @@ import Data.Hashable
 import Control.Monad
 
 traceM' :: Monad m => m String -> m ()
---traceM' = const $ return ()
---trace' x y = y
-traceM' = (=<<) traceM
-trace' = trace
+traceM' = const $ return ()
+trace' x y = y
+--traceM' = (=<<) traceM
+--trace' = trace
 
 type ThunkContext ref = HM.HashMap Var ref
 
@@ -68,19 +68,16 @@ createBasics = do
   e2 <- convertToThunks elIfFalse
   e3 <- convertToThunks elCaseL
   e4 <- convertToThunks elCaseR
-  return ThunkBasics { thIfFalse = e1
-                     , thIfTrue = e2
+  return ThunkBasics { thIfFalse = e2
+                     , thIfTrue = e1
                      , thCaseL = e3
                      , thCaseR = e4
                      }
 
 newThunk :: MonadThunkState ref m => Thunk ref -> m ref
 newThunk th = do thId <- nextThunkId
-                 -- @TODO uncomment
-                 --th' <- computeThunkFV th
-                 let th' = th
-                     -- @TODO replace 0 with thId
-                 addThunk th' { thId = 0, thNormalized = Nothing }
+                 th' <- computeThunkFV th
+                 addThunk th' { thId = thId, thNormalized = Nothing }
 
 
 thNormalized' :: MonadThunkState ref m => ref -> m (Maybe ref)
