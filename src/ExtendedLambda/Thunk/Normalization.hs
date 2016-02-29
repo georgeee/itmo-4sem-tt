@@ -9,30 +9,30 @@ import ExtendedLambda.Thunk.State
 import Control.Monad.State.Class
 import Data.Foldable
 import Common
-import Control.Monad.Error.Class (catchError)
+import Control.Monad.Error.Class (catchError, MonadError, throwError)
 import Control.Monad.Trans.Either
 import qualified "unordered-containers" Data.HashMap.Strict as HM
 import ExtendedLambda.Types
 import ExtendedLambda.Base
 import Control.Monad.State.Strict
 
-testThunkNormalize s = let res = runNormMonadSt chain
-                        in case res of
-                             Left s -> Left s
-                             Right (Left e, thState) -> Right . Left $ evalState (printE e) thState
-                             Right (Right e, thState) -> Right . Right $ evalState (printE e) thState
+testThunkNormalize s run = runNormMonadSt run chain
+ --                          in case res of
+ --                            Left s -> Left s
+ --                            Right (Left e, thState) -> Right . Left $ run (thShowIdent 0 e) thState
+ --                            Right (Right e, thState) -> Right . Right $ run (thShowIdent 0 e) thState
   where chain = testElParseSt s >>= normalizeRecursion >>= convertToThunks >>= normalize
-        printE e = do e' <- thShowIdent 0 e
-                      sz <- gets (HM.size . thunks)
-                      cnt <- gets (idCounter)
-                      return $ e' ++ "  sz=" ++ show sz ++ "  cnt=" ++ show cnt
+        chainP = (chain >>= thShowIdent 0) `catchError` (thShowIdent >=> left)
 
-normalize :: ThunkRef -> NormMonad ThunkState ThunkRef
-normalize = \r -> createBasics >>= flip bImpl r
-  where bImpl ThunkBasics { thIfFalse = ifFalseTh
-                          , thIfTrue = ifTrueTh
-                          , thCaseL = caseL
-                          , thCaseR = caseR } = impl HM.empty
+normalize :: (MonadThunkState ref m, MonadError String m) => ref -> EitherT ref m ref
+normalize = \r -> do
+    iT <- convertToThunks elIfTrue
+    iF <- convertToThunks elIfFalse
+    cL <- convertToThunks elCaseL
+    cR <- convertToThunks elCaseR
+    bImpl iT iF cL cR r
+  where bImpl :: (MonadThunkState ref m, MonadError String m) => ref -> ref -> ref -> ref -> ref -> EitherT ref m ref
+        bImpl ifTrueTh ifFalseTh caseL caseR = impl HM.empty
           where
            impl m _thRef = do
                traceM' $ return $ "Digged to thRef " ++ show _thRef ++ ", within context: " ++ (show m)
@@ -41,8 +41,6 @@ normalize = \r -> createBasics >>= flip bImpl r
                   then traceM' $ return $ "Merged contexts, new thRef: " ++ show _thRef'
                   else return ()
                repeatNorm (withCache impl') _thRef'
-
-           impl' :: ThunkRef -> NormMonad ThunkState ThunkRef
            impl' thRef = do
                  encloseCtx thRef
                  propagateCtx thRef

@@ -43,12 +43,6 @@ class (MonadThunkId m, Show ref, Eq ref) => MonadThunkState ref m where
   addThunk :: Thunk ref -> m ref
   getThunk :: ref -> m (Thunk ref)
 
-data ThunkBasics ref = ThunkBasics { thIfFalse :: ref
-                                   , thIfTrue :: ref
-                                   , thCaseL :: ref
-                                   , thCaseR :: ref
-                                   }
-
 instance MonadThunkId m => MonadThunkId (ReaderT a m) where
   nextThunkId = lift nextThunkId
 instance MonadThunkState ref m => MonadThunkState ref (ReaderT a m) where
@@ -61,18 +55,6 @@ instance MonadThunkState ref m => MonadThunkState ref (EitherT a m) where
   getThunk = lift . getThunk
   updThunk r = lift . updThunk r
   addThunk = lift . addThunk
-
-createBasics :: MonadThunkState ref m => m (ThunkBasics ref)
-createBasics = do
-  e1 <- convertToThunks elIfTrue
-  e2 <- convertToThunks elIfFalse
-  e3 <- convertToThunks elCaseL
-  e4 <- convertToThunks elCaseR
-  return ThunkBasics { thIfFalse = e2
-                     , thIfTrue = e1
-                     , thCaseL = e3
-                     , thCaseR = e4
-                     }
 
 newThunk :: MonadThunkState ref m => Thunk ref -> m ref
 newThunk th = do thId <- nextThunkId

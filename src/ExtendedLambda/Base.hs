@@ -1,7 +1,7 @@
 {-# LANGUAGE PackageImports, FlexibleContexts #-}
 module ExtendedLambda.Base (elParse, testElParse, testElParseSt, mergeContexts, mergeContexts', CounterBasedState(..)
                            , freshId, freshId', insertWithReplace, normalizeRecursion, freeVars, renameBound, replaceAllFree
-                           , NormMonad, oneOf, (<?$>), (<?*>), repeatNorm, toRight, runNormMonad, runNormMonad', testNormMonad
+                           , NormMonadSt, NormMonad, oneOf, (<?$>), (<?*>), repeatNorm, toRight, runNormMonad, runNormMonad', testNormMonad
                            , elIfTrue, elIfFalse, elCaseL, elCaseR, runNormMonadSt
                            ) where
 
@@ -48,7 +48,7 @@ infixl 4 <?*>
 (<?*>) :: Monad m => EitherT a m (a -> a) -> EitherT a m a -> EitherT a m a
 (<?*>) f m = f >>= (<?$> m)
 
-repeatNorm :: (a -> NormMonad s a) -> a -> NormMonad s a
+repeatNorm :: Monad m => (b -> EitherT c m b) -> b -> EitherT c m c
 repeatNorm m = m >=> toRight . repeatNorm m
 
 toRight :: Functor n => EitherT b n b -> EitherT e' n b
@@ -60,8 +60,7 @@ runNormMonad = fmap (either id id) . runNormMonad'
 runNormMonad' :: CounterBasedState s => NormMonad s a -> Either String (Either a a)
 runNormMonad' = runExcept . flip evalStateT counterEmptyState . runEitherT
 
-runNormMonadSt :: CounterBasedState s => NormMonad s a -> Either String (Either a a, s)
-runNormMonadSt = runExcept . flip runStateT counterEmptyState . runEitherT
+runNormMonadSt run = runExcept . flip run counterEmptyState . runEitherT
 
 testNormMonad :: CounterBasedState s => (ExtendedLambda -> NormMonad s a) -> String -> Either String (Either a a)
 testNormMonad m s = runNormMonad' (testElParseSt s >>= normalizeRecursion >>= m)
