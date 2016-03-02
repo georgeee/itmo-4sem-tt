@@ -18,21 +18,6 @@ import ExtendedLambda.Types
 import ExtendedLambda.Base
 import Control.Monad.State.Strict
 
---type EvalThunkStateT st s ref = st s (Except String) (Either ref ref) -> s -> Except String (Either String String)
---
---testThunkNormalizeState :: String -> Either String (Either String String)
---testThunkNormalizeState = testThunkNormalize (evalStateT :: EvalThunkStateT StateT ThSt.ThunkState ThSt.ThunkRef)
---
---testThunkNormalize run s = runNormMonadSt run chain
---  where chain = testElParseSt s >>=
---
---testThunkNormalizeSt :: String -> Either String (Either String String)
---testThunkNormalizeSt = _ . runStateT counterEmptyState . runEitherT . (testElParseSt >=> chain)
-
---testThunkNormalizeSt s = runNormMonad' (testElParseSt s >>= printE . (chain :: ExtendedLambda -> NormMonad ThSt.ThunkState ThSt.ThunkRef))
-
---runNormMonadSt run = runExcept . flip run counterEmptyState . runEitherT
-
 evalStateT' :: Monad m => StateT ThSt.ThunkState m a -> ThSt.ThunkState -> m a
 evalStateT' = evalStateT
 
@@ -56,6 +41,7 @@ chain e i = chain' $ evalState (normalizeRecursion e) i
 
 chain' :: (MonadThunkState ref m, MonadError String m) => ExtendedLambda -> m (Either ExtendedLambda ExtendedLambda)
 chain' = convertToThunks >=> normalize >=> either (convertFromThunks >=> left) (convertFromThunks >=> right)
+
 
 normalize :: (MonadThunkState ref m, MonadError String m) => ref -> m (Either ref ref)
 normalize = \r -> do
@@ -104,26 +90,42 @@ normalize = \r -> do
                               where alter' comp' = if comp == comp'
                                                    then left thRef
                                                    else alter comp'
+                            synError = throwError . (++) "Can't normalize: " =<< thShowIdent 0 thRef
                         case p of
-                          IOp _ -> digRight
-                          OrdOp _ -> digRight
+                          IOp _ -> case q of
+                                      (_ :@ _) -> digRight
+                                      (V _) -> digRight
+                                      (I _) -> digRight
+                                      _ -> synError
+                          OrdOp _ -> case q of
+                                      (_ :@ _) -> digRight
+                                      (V _) -> digRight
+                                      (I _) -> digRight
+                                      _ -> synError
                           If -> case q of
                                   (B b) -> if b
                                               then right ifTrueTh
                                               else right ifFalseTh
-                                  _ -> digRight
+                                  (_ :@ _) -> digRight
+                                  (V _) -> digRight
+                                  e -> synError
                           PrL -> case q of
                                    aTh :~ bTh -> right =<< joinCtx ctx =<< joinCtx qCtx aTh
-                                   _ -> digRight
+                                   (_ :@ _) -> digRight
+                                   (V _) -> digRight
+                                   _ -> synError
                           PrR -> case q of
                                    aTh :~ bTh -> right =<< joinCtx ctx =<< joinCtx qCtx bTh
-                                   _ -> digRight
+                                   (_ :@ _) -> digRight
+                                   (V _) -> digRight
+                                   _ -> synError
                           (Abs v s) -> do
                                qTh' <- trace' "@@ 6" $ joinCtx ctx qTh
                                right =<< joinCtx ctx =<< joinCtx (HM.singleton v qTh') =<< joinCtx pCtx s
-                          Y -> do restTh <- newThunk th { thContext = HM.empty }
-                                  updThunk thRef (\s -> s { thExpr = qTh :@ restTh })
-                                  right thRef
+                          Y -> do
+                               restTh <- newThunk th { thContext = HM.empty }
+                               updThunk thRef (\s -> s { thExpr = qTh :@ restTh })
+                               right thRef
                           Case -> case q of
                                    qlTh :@ qrTh -> do propagateCached qlTh
                                                       ql <- thExpr <$> getThunk qlTh
@@ -134,8 +136,10 @@ normalize = \r -> do
                                                         InR -> do
                                                            updThunk thRef (\s -> s { thExpr = caseR :@ qrTh })
                                                            right thRef
-                                                        _ -> digRight
-                                   _ -> digRight
+                                                        (_ :@ _) -> digRight
+                                                        (V _) -> digRight
+                                                        _ -> synError
+                                   _ -> synError
                           plTh :@ prTh -> do propagateCached plTh
                                              propagateCached prTh
                                              pl <- thExpr <$> getThunk plTh
@@ -145,12 +149,16 @@ normalize = \r -> do
                                                 updThunk thRef (\s -> s { thExpr = I (iop op i j)
                                                                         , thContext = HM.empty })
                                                 right thRef
-                                              (IOp _, I _, _) -> digRight
+                                              (IOp _, I _, (_ :@ _)) -> digRight
+                                              (IOp _, I _, V _) -> digRight
+                                              (IOp _, I _, _) -> synError
                                               (OrdOp op, I i, I j) -> do
                                                 updThunk thRef (\s -> s { thExpr = B (ordOp op i j)
                                                                         , thContext = HM.empty })
                                                 right thRef
-                                              (OrdOp _, I _, _) -> digRight
+                                              (OrdOp _, I _, (_ :@ _)) -> digRight
+                                              (OrdOp _, I _, V _) -> digRight
+                                              (OrdOp _, I _, _) -> synError
                                               _ -> digLeft
                           _ -> digLeft
                      _ -> left thRef
