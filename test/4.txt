@@ -1,0 +1,6 @@
+let flip = \f . \a . \b. f b a,
+    dot = \f . \g . \x . f (g x)
+ in let flip2 = dot flip flip,
+        fstBr = flip If <5,6> (Eq 1 0) <7,8>,
+        sndBr = flip2 If (Eq 4 4) <flip Minus 2 8, 0> <10, 10>
+     in Plus (PrR fstBr) (PrL sndBr)

@@ -1,0 +1,4 @@
+let f' = \f . \u.\a .\b . f a (let g = \n . n a b b,
+                              const = \f. \x . f,
+                              h = g (const u) in u (g f) h) b
+ in f' If Plus (Eq 0 0) 10
