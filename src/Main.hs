@@ -85,7 +85,7 @@ elNorm :: (ExtendedLambda -> Int -> Either String (Either ExtendedLambda Extende
 elNorm norm e st = either ("Error " ++) show $ norm e st
 
 algoW :: ExtendedLambda -> Int -> String
-algoW e st = either ("Error " ++) id $ (\(t,e) -> show t ++ "\n" ++ show e) <$> evalState (runEitherT $ normalizeRecursion e >>= EL.findType) st
+algoW e st = either ("Error " ++) id $ (\(t,e) -> show t ++ "\n" ++ show e) <$> runFindType e st
 
 showSTResult (Left e) = "Lambda has no type, failed on equation " ++ (show e)
 showSTResult (Right (l, t, m)) = (show l) ++ " :: " ++ (show t) ++ "\nContext:\n" ++ (showMap " :: " m)

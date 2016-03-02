@@ -1,6 +1,6 @@
 {-# LANGUAGE PackageImports, FlexibleContexts, MultiParamTypeClasses, FlexibleInstances #-}
 module ExtendedLambda.Base (elParse, testElParse, testElParseSt, mergeContexts, mergeContexts', CounterBasedState(..)
-                           , freshId, freshId', insertWithReplace, normalizeRecursion, freeVars, renameBound, replaceAllFree
+                           , freshIdS, freshId, freshId', insertWithReplace, normalizeRecursion, freeVars, renameBound, replaceAllFree
                            , NormMonadSt, NormMonad, oneOf, (<?$>), (<?*>), repeatNorm, toRight, runNormMonad, runNormMonad', testNormMonad
                            , elIfTrue, elIfFalse, elCaseL, elCaseR, runNormMonadSt
                            ) where
@@ -123,8 +123,11 @@ testElParseSt = testParserSt elParse
 freshId' :: (CounterBasedState s, MonadState s m) => m Int
 freshId' = gets counterNext >>= \(i, n) -> put n >> return i
 
+freshIdS :: (CounterBasedState s, MonadState s m) => String -> m String
+freshIdS s = (++) s . show <$> (gets counterNext >>= \(i, n) -> put n >> return i)
+
 freshId :: (CounterBasedState s, MonadState s m) => m String
-freshId = ("_x" ++ ) . show <$> (gets counterNext >>= \(i, n) -> put n >> return i)
+freshId = freshIdS "_x"
 
 infixl 4 <.$>
 infixl 4 <.*>
@@ -167,17 +170,36 @@ normalizeRecursion e = snd <$> impl e
         replaceLB vs (fv0, (bs, rm, newLbs)) (i, (x, e))
             = replaceAllFree rm e >>= impl >>= \(fv, e') ->
               let needY = x `HS.member` fv
-                  -- fv' is a set of vars of same let, comming after current (if not empty, wee need to present new var x0)
-                  fv' = HM.keys $ HM.filterWithKey (\k i' -> HS.member k fv && i' > i) vs
+                  -- fv' is a set of vars of same let, comming after current (if not empty, we need to present new var x0)
+                  fv' = HM.filterWithKey (\k i' -> HS.member k fv && i' > i) vs
                   resE e'' = if needY then noContext $ noContext Y :@ noContext (Abs x e'') else e''
                   resFV = fv0 `mappend` HS.delete x fv
                in if F.null fv'
-                     then return (resFV, ((x ,resE e'):bs, rm, newLbs))
+                     then return (resFV, ((x ,resE e') : bs, rm, newLbs))
                      else freshId >>= \n ->
-                       let replacement = noContext $ foldr' (\a b -> noContext b :@ noContext (V a)) (V n) (reverse fv')
-                           e'' = foldr' (\v e -> noContext $ Abs v e) e' fv'
+                       let replacement = noContext $ foldr' (\a b -> noContext b :@ noContext (V a)) (V n) (reverse $ map fst fv'')
+                           (eR, fv'') = replaceSeq fv' e'
+                           eA = foldr' (\v e -> noContext $ Abs v e) eR $ map snd fv''
                         in insertWithReplace x replacement rm
-                            >>= \rm' ->return (resFV, ((n ,resE e''):bs, rm', (x, replacement):newLbs))
+                            >>= \rm' -> return (resFV, ((n ,resE eA) : bs, rm', (x, replacement) : newLbs))
+
+-- replaces all usages of vars from map to numerated synonyms, returns list of replacements
+replaceSeq :: HM.HashMap Var a -> ExtendedLambda -> (ExtendedLambda, [(Var, Var)])
+replaceSeq fvM = fmap snd . flip runState (0, []) . impl' fvM
+  where newId v = get >>= \(i, ls) -> put (i + 1, ls)
+                      >> let v' = "__" ++ v ++ show i
+                          in modify (fmap ((v, v'):)) >> return v'
+        impl m (a :~ b) = (:~) <$> impl' m a <*> impl' m b
+        impl m (a :@ b) = (:@) <$> impl' m a <*> impl' m b
+        impl m (Abs v e) = Abs v <$> impl' (v `HM.delete` m) e
+        impl m (V v) = if v `HM.member` m
+                          then V <$> newId v
+                          else return $ V v
+        impl _ e = return e
+        impl' m (ls ::= e) = let m' = foldr' HM.delete m $ LHM.keys ls
+                              in (::=) <$> mapM (impl' m') ls <*> impl m' e
+
+
 
 freeVars :: ExtendedLambda -> HS.HashSet Var
 freeVars el = execState (fvs' HS.empty el) HS.empty

@@ -1,4 +1,4 @@
-{-# LANGUAGE PackageImports, FlexibleContexts #-}
+{-# LANGUAGE PackageImports, FlexibleContexts, MultiParamTypeClasses, FlexibleInstances #-}
 module ExtendedLambda.Types (IOp(..), iop, ordOp, ELContext, noContext, ExtendedLambdaBase(..), ExtendedLambda(..), IdentShow(..), ELambdaContainer(..)) where
 
 import Common
@@ -48,44 +48,44 @@ class ELambdaContainer e where
 instance ELambdaContainer ExtendedLambda where
   extractEl (_ ::= e) = e
 
+instance Show (ExtendedLambdaBase ExtendedLambda) where
+  show = showIdent 0 ()
+
 instance Show ExtendedLambda where
-  show = showIdent 0
+  show = showIdent 0 ()
 
-class IdentShow a where
-  showIdent :: Int -> a -> String
+class Monoid u => IdentShow a u where
+  showIdent :: Int -> u -> a -> String
 
-instance (IdentShow c, ELambdaContainer c) => Show (ExtendedLambdaBase c) where
-  show = showIdent 0
+instance (IdentShow c u, ELambdaContainer c) => IdentShow (ExtendedLambdaBase c) u where
+  showIdent _ _ (I x) = show x
+  showIdent _ _ (B b) = if b then "T" else "F"
+  showIdent _ _ Y = "Y"
+  showIdent _ _ PrL = "PrL"
+  showIdent _ _ PrR = "PrR"
+  showIdent _ _ InL = "InL"
+  showIdent _ _ InR = "InR"
+  showIdent _ _ Case = "Case"
+  showIdent _ _ If = "If"
+  showIdent _ _ (IOp Add) = "Plus"
+  showIdent _ _ (IOp Subtract) = "Minus"
+  showIdent _ _ (OrdOp EQ) = "Eq"
+  showIdent _ _ (OrdOp LT) = "Lt"
+  showIdent _ _ (OrdOp GT) = "Gt"
+  showIdent i u (l :~ r) = let i' = i + 1 in "<" ++ (showIdent i' u l) ++ ", " ++ (showIdent i' u r) ++ ">"
+  showIdent i u (Abs v e) = let i' = i + 1 in "(\\" ++ v ++ ". " ++ (showIdent i' u e) ++ ")"
+  showIdent i u (l :@ r) = let i' = i + 1 in (showIdent i' u l) ++ " " ++ (show' i' u r)
+    where show' i u r = case extractEl r of
+                        (_ :@ _) -> "(" ++ (showIdent i u r) ++ ")"
+                        _ -> showIdent i u r
+  showIdent _ _ (V v) = v
 
-instance (IdentShow c, ELambdaContainer c) => IdentShow (ExtendedLambdaBase c) where
-  showIdent _ (I x) = show x
-  showIdent _ (B b) = if b then "T" else "F"
-  showIdent _ Y = "Y"
-  showIdent _ PrL = "PrL"
-  showIdent _ PrR = "PrR"
-  showIdent _ InL = "InL"
-  showIdent _ InR = "InR"
-  showIdent _ Case = "Case"
-  showIdent _ If = "If"
-  showIdent _ (IOp Add) = "Plus"
-  showIdent _ (IOp Subtract) = "Minus"
-  showIdent _ (OrdOp EQ) = "Eq"
-  showIdent _ (OrdOp LT) = "Lt"
-  showIdent _ (OrdOp GT) = "Gt"
-  showIdent i (l :~ r) = let i' = i + 1 in "<" ++ (showIdent i' l) ++ ", " ++ (showIdent i' r) ++ ">"
-  showIdent i (Abs v e) = let i' = i + 1 in "(\\" ++ v ++ ". " ++ (showIdent i' e) ++ ")"
-  showIdent i (l :@ r) = let i' = i + 1 in (showIdent i' l) ++ " " ++ (show' i' r)
-    where show' i r = case extractEl r of
-                        (_ :@ _) -> "(" ++ (showIdent i r) ++ ")"
-                        _ -> showIdent i r
-  showIdent _ (V v) = v
-
-instance IdentShow ExtendedLambda where
-  showIdent i (bs ::= t) = if LHM.null bs then showIdent i t else let i' = i + 1 in
-              concat [ "\n" ++ (sps $ i * 2) ++ "(let " ++ (intercalate (",\n" ++ (sps $ i * 2 + 4)) $ showLBs i' bs)
-                     , "\n" ++ (sps $ i' * 2 - 1) ++ "in " ++ (showIdent i' t) ++ ")"
+instance IdentShow ExtendedLambda () where
+  showIdent i u (bs ::= t) = if LHM.null bs then showIdent i u t else let i' = i + 1 in
+              concat [ "\n" ++ (sps $ i * 2) ++ "(let " ++ (intercalate (",\n" ++ (sps $ i * 2 + 4)) $ showLBs i' u bs)
+                     , "\n" ++ (sps $ i' * 2 - 1) ++ "in " ++ (showIdent i' u t) ++ ")"
                      ]
-    where showLBs i = map (\(v, s) -> v ++ " = " ++ (showIdent i s)) . LHM.toList
+    where showLBs i u = map (\(v, s) -> v ++ " = " ++ (showIdent i u s)) . LHM.toList
 
 p i s = (replicate (i*2) ' ') ++ s
 sps = flip replicate ' '
