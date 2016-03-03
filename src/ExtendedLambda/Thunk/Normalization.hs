@@ -49,7 +49,7 @@ normalize toNF = \r -> do
     cR <- convertToThunks elCaseR
     bImpl iT iF cL cR r
   where bImpl :: (MonadThunkState ref m, MonadError String m) => ref -> ref -> ref -> ref -> ref -> m (Either ref ref)
-        bImpl !ifTrueTh !ifFalseTh !caseL !caseR = impl True LHM.empty
+        bImpl !ifTrueTh !ifFalseTh !caseL !caseR = impl True False LHM.empty
           where
            getThref !m !_thRef = do
                _thRef' <- joinCtx m =<< getCached _thRef
@@ -57,10 +57,15 @@ normalize toNF = \r -> do
                   then traceM' $ return $ "Merged contexts, new thRef: " ++ show _thRef'
                   else return ()
                return _thRef'
-           impl lb !m !_thRef = do
+           impl lb noY !m !_thRef = do
                traceM' $ return $ "Digged to thRef " ++ show _thRef ++ ", within context: " ++ (show m)
-               repeatNorm' (withCache $ impl' lb) =<< getThref m _thRef
-           impl' lb !thRef = do
+               thRef <- getThref m _thRef
+               th <- getThunk thRef
+               if lb && not (thLb th)
+                  then trace' ("Resetting cache for lb " ++ show thRef) $ updThunk thRef (\s -> s { thNormalized = Nothing, thLb = True })
+                  else return ()
+               repeatNorm' (withCache $ impl' lb noY) thRef
+           impl' lb noY !thRef = do
                  encloseCtx thRef
                  propagateCtx thRef
                  propagateCached thRef
@@ -90,14 +95,15 @@ normalize toNF = \r -> do
                         q <- thExpr <$> getThunk qTh
                         pCtx <- thContext <$> getThunk pTh
                         qCtx <- thContext <$> getThunk qTh
-                        let digLeft = trace' "digLeft" $ dig alterLeft pTh
-                            digRight = trace' "digRight" $ dig alterRight qTh
+                        let digLeft = trace' "digLeft" $ dig False alterLeft pTh
+                            digRight = trace' "digRight" $ dig False alterRight qTh
                             alterLeft !pTh' = upd right (pTh' :@ qTh)
                             alterRight !qTh' = upd right (pTh :@ qTh')
-                            dig alter !comp = impl False ctx comp >>= either alter' alter
+                            dig noY alter !comp = impl False noY ctx comp >>= either alter' alter
                               where alter' comp' = if comp == comp'
                                                       then left thRef
                                                       else alter comp'
+                            digBoth' = digLeft >>= either (const $ dig True alterRight qTh) right
                             synError = throwError . (++) "Can't normalize: " =<< thShowIdent 0 thRef
                         case p of
                           IOp _ -> case q of
@@ -137,7 +143,11 @@ normalize toNF = \r -> do
                                     -- =<< joinCtx ctx
                                     =<< joinCtx pCtx
                                     =<< joinCtx (LHM.singleton v qTh) s
-                          Y -> do
+                          Y -> if noY
+                                  then if toNF && lb
+                                          then digRight
+                                          else left thRef
+                                  else do
                              restTh <- newThunk th
                              updThunk thRef (\s -> s { thExpr = qTh :@ restTh })
                              right thRef
@@ -176,13 +186,13 @@ normalize toNF = \r -> do
                                               (OrdOp _, I _, V _) -> digRight
                                               (OrdOp _, I _, _) -> synError
                                               _ -> digLeft
-                          _ -> digLeft
+                          _ -> if toNF && lb then digBoth' else digLeft
                      pTh :~ qTh -> if toNF && lb
-                                      then digBoth (:~) pTh qTh (impl True) (impl True)
+                                      then digBoth (:~) pTh qTh (impl True False) (impl True False)
                                       else left thRef
                      Abs v e -> if toNF && lb
                                    then do
-                                     e' <- impl True ctx e
+                                     e' <- impl True False ctx e
                                      case e' of
                                        Left e'' -> if e'' /= e
                                                       then upd right $ Abs v e''
