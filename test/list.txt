@@ -1,0 +1,10 @@
+let nil = InL 0
+  , cons = \x. \l. InR <x, l>
+  , const = \f. \x. f
+  , dot = \f.\g.\x. f (g x)
+  , fold = \f. \c. \l. Case l (const c) (\p. f (PrL p) (fold f c (PrR p)))
+  , sum = fold Plus 0
+  , sampleList = cons 1 (cons 2 (cons 3 (cons 4 (cons 6 nil))))
+  , map = \f. fold (dot cons f) nil
+  , bool2Int = (\b . If b 1 0)
+ in <sum sampleList, (dot sum (dot (map bool2Int) (map (Gt 3)))) sampleList>

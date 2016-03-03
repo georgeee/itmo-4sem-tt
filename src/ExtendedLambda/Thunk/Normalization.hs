@@ -155,6 +155,7 @@ normalize toNF = \r -> do
                                                         (_ :@ _) -> digRight
                                                         (V _) -> digRight
                                                         _ -> synError
+                                   V _ -> digRight
                                    _ -> synError
                           _ :~ _ -> synError
                           plTh :@ prTh -> do propagateCached plTh
