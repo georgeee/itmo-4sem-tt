@@ -5,4 +5,4 @@ let div2 = \n. If (Gt n 1) (let d' = div2 (Minus n 2)
                                        m = PrR nP,
                                        res = cnt2 n'
                                     in <Plus (PrL res) 1, Plus (PrR res) m>)
- in (cnt2 41)
+ in cnt2 41
