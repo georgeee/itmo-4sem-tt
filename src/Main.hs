@@ -83,7 +83,7 @@ main = do
     -10 -> basicRunner' fullReader opts elParse 0 $ elNorm $ normalizeSt True
     9 -> basicRunner' fullReader opts elParse 0 algoW
 
-elNorm :: (ExtendedLambda -> Int -> Either String (Either ExtendedLambda ExtendedLambda)) -> ExtendedLambda -> Int -> String
+elNorm :: (ExtendedLambda -> Int -> Either String ExtendedLambda) -> ExtendedLambda -> Int -> String
 elNorm norm e st = either ("Error " ++) show $ norm e st
 
 algoW :: ExtendedLambda -> Int -> String

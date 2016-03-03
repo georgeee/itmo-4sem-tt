@@ -45,7 +45,6 @@ data Thunk ref = Thunk { thId :: ThunkId
                        , thContext :: ThunkContext ref
                        , thFree :: HS.HashSet Var
                        , thNormalized :: Maybe ref
-                       , thLb :: Bool
                        }
 
 class Monad m => MonadThunkId m where
@@ -258,7 +257,6 @@ convertToThunks (ctx ::= e) = do thId <- nextThunkId
                                                    , thContext = ctx'
                                                    , thFree = fv
                                                    , thNormalized = Nothing
-                                                   , thLb = False
                                                    }
                                  addThunk thunk
 

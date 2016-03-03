@@ -23,33 +23,47 @@ import qualified Data.LinkedHashMap.IntMap as LHM
 evalStateT' :: Monad m => StateT ThSt.ThunkState m a -> ThSt.ThunkState -> m a
 evalStateT' = evalStateT
 
-testThunkNormalizeSt :: Bool -> String -> Either String (Either ExtendedLambda ExtendedLambda)
+testThunkNormalizeSt :: Bool -> String -> Either String ExtendedLambda
 testThunkNormalizeSt toNF s = uncurry (normalizeSt toNF) $ runState (testElParseSt s) 0
 
-testThunkNormalizeST :: Bool -> String -> Either String (Either ExtendedLambda ExtendedLambda)
+testThunkNormalizeST :: Bool -> String -> Either String ExtendedLambda
 testThunkNormalizeST toNF s = uncurry (normalizeST toNF) $ runState (testElParseSt s) 0
 
-normalizeSt :: Bool -> ExtendedLambda -> Int -> Either String (Either ExtendedLambda ExtendedLambda)
+normalizeSt :: Bool -> ExtendedLambda -> Int -> Either String ExtendedLambda
 normalizeSt toNF e i = runExcept $ flip evalStateT' counterEmptyState $ chain toNF e i
 
-normalizeST :: Bool -> ExtendedLambda -> Int -> Either String (Either ExtendedLambda ExtendedLambda)
+normalizeST :: Bool -> ExtendedLambda -> Int -> Either String ExtendedLambda
 normalizeST toNF e i = runExcept $ ThST.evalThunkSTT $ chain toNF e i
 
-chain :: (MonadThunkState ref m, MonadError String m) => Bool -> ExtendedLambda -> Int -> m (Either ExtendedLambda ExtendedLambda)
+chain :: (MonadThunkState ref m, MonadError String m) => Bool -> ExtendedLambda -> Int -> m ExtendedLambda
 chain toNF e i = chain' toNF $ evalState (normalizeRecursion e) i
 
-chain' :: (MonadThunkState ref m, MonadError String m) => Bool -> ExtendedLambda -> m (Either ExtendedLambda ExtendedLambda)
-chain' toNF  = convertToThunks >=> normalize toNF >=> either (convertFromThunks >=> left) (convertFromThunks >=> right)
+chain' :: (MonadThunkState ref m, MonadError String m) => Bool -> ExtendedLambda -> m ExtendedLambda
+chain' toNF  = convertToThunks >=> normalize toNF >=> convertFromThunks
 
-normalize :: (MonadThunkState ref m, MonadError String m) => Bool -> ref -> m (Either ref ref)
+stripNormalized :: (MonadThunkState ref m, MonadError String m) => ref -> m ref
+stripNormalized thRef = do
+  encloseCtx thRef
+  propagateCtx thRef
+  propagateCached thRef
+  th <- getThunk thRef
+  e' <- case thExpr th of
+     a :~ b -> (:~) <$> stripNormalized a <*> stripNormalized b
+     a :@ b -> (:@) <$> stripNormalized a <*> stripNormalized b
+     Abs v s -> Abs v <$> stripNormalized s
+     e -> return e
+  updThunk thRef (\s -> s { thNormalized = Nothing, thExpr = e' })
+  return thRef
+
+normalize :: (MonadThunkState ref m, MonadError String m) => Bool -> ref -> m ref
 normalize toNF = \r -> do
     iT <- convertToThunks elIfTrue
     iF <- convertToThunks elIfFalse
     cL <- convertToThunks elCaseL
     cR <- convertToThunks elCaseR
     bImpl iT iF cL cR r
-  where bImpl :: (MonadThunkState ref m, MonadError String m) => ref -> ref -> ref -> ref -> ref -> m (Either ref ref)
-        bImpl !ifTrueTh !ifFalseTh !caseL !caseR = impl LHM.empty
+  where bImpl :: (MonadThunkState ref m, MonadError String m) => ref -> ref -> ref -> ref -> ref -> m ref
+        bImpl !ifTrueTh !ifFalseTh !caseL !caseR = if toNF then implNF else implHNF
           where
            getThref !m !_thRef = do
                _thRef' <- joinCtx m =<< getCached _thRef
@@ -62,6 +76,17 @@ normalize toNF = \r -> do
                thRef <- getThref m _thRef
                th <- getThunk thRef
                repeatNorm' (withCache $ impl') thRef
+           implHNF e = either id id <$> impl LHM.empty e
+           implNF = implHNF >=> getCached >=> stripNormalized
+                      >=> \thRef' -> do
+                             th <- getThunk thRef'
+                             e' <- case thExpr th of
+                               a :~ b -> (:~) <$> implNF a <*> implNF b
+                               a :@ b -> (:@) <$> implNF a <*> implNF b
+                               Abs v s -> Abs v <$> implNF s
+                               e -> return e
+                             updThunk thRef' (\s -> s { thExpr = e' })
+                             stripNormalized thRef'
            impl' !thRef = do
                  encloseCtx thRef
                  propagateCtx thRef
