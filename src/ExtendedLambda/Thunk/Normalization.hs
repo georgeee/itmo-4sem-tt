@@ -2,6 +2,7 @@
     MultiParamTypeClasses, GeneralizedNewtypeDeriving #-}
 module ExtendedLambda.Thunk.Normalization where
 
+import Data.Either.Combinators
 import Control.Monad.Trans.Reader (asks)
 import Debug.Trace
 import ExtendedLambda.Thunk.Base
@@ -17,62 +18,69 @@ import qualified "unordered-containers" Data.HashMap.Strict as HM
 import ExtendedLambda.Types
 import ExtendedLambda.Base
 import Control.Monad.State.Strict
+import qualified Data.LinkedHashMap.IntMap as LHM
 
 evalStateT' :: Monad m => StateT ThSt.ThunkState m a -> ThSt.ThunkState -> m a
 evalStateT' = evalStateT
 
-testThunkNormalizeSt :: String -> Either String (Either ExtendedLambda ExtendedLambda)
-testThunkNormalizeSt s = uncurry normalizeSt $ runState (testElParseSt s) 0
+testThunkNormalizeSt :: Bool -> String -> Either String (Either ExtendedLambda ExtendedLambda)
+testThunkNormalizeSt toNF s = uncurry (normalizeSt toNF) $ runState (testElParseSt s) 0
 
-testThunkNormalizeST :: String -> Either String (Either ExtendedLambda ExtendedLambda)
-testThunkNormalizeST s = uncurry normalizeST $ runState (testElParseSt s) 0
+testThunkNormalizeST :: Bool -> String -> Either String (Either ExtendedLambda ExtendedLambda)
+testThunkNormalizeST toNF s = uncurry (normalizeST toNF) $ runState (testElParseSt s) 0
 
-normalizeSt :: ExtendedLambda -> Int -> Either String (Either ExtendedLambda ExtendedLambda)
-normalizeSt e i = runExcept $ flip evalStateT' counterEmptyState $ chain e i
+normalizeSt :: Bool -> ExtendedLambda -> Int -> Either String (Either ExtendedLambda ExtendedLambda)
+normalizeSt toNF e i = runExcept $ flip evalStateT' counterEmptyState $ chain toNF e i
 
-normalizeST :: ExtendedLambda -> Int -> Either String (Either ExtendedLambda ExtendedLambda)
-normalizeST e i = runExcept $ ThST.evalThunkSTT $ chain e i
+normalizeST :: Bool -> ExtendedLambda -> Int -> Either String (Either ExtendedLambda ExtendedLambda)
+normalizeST toNF e i = runExcept $ ThST.evalThunkSTT $ chain toNF e i
 
-testChain :: (MonadThunkState ref m, MonadError String m) => String -> m (Either ExtendedLambda ExtendedLambda)
-testChain s = uncurry chain $ runState (testElParseSt s) 0
+chain :: (MonadThunkState ref m, MonadError String m) => Bool -> ExtendedLambda -> Int -> m (Either ExtendedLambda ExtendedLambda)
+chain toNF e i = chain' toNF $ evalState (normalizeRecursion e) i
 
-chain :: (MonadThunkState ref m, MonadError String m) => ExtendedLambda -> Int -> m (Either ExtendedLambda ExtendedLambda)
-chain e i = chain' $ evalState (normalizeRecursion e) i
+chain' :: (MonadThunkState ref m, MonadError String m) => Bool -> ExtendedLambda -> m (Either ExtendedLambda ExtendedLambda)
+chain' toNF  = convertToThunks >=> normalize toNF >=> either (convertFromThunks >=> left) (convertFromThunks >=> right)
 
-chain' :: (MonadThunkState ref m, MonadError String m) => ExtendedLambda -> m (Either ExtendedLambda ExtendedLambda)
-chain' = convertToThunks >=> normalize >=> either (convertFromThunks >=> left) (convertFromThunks >=> right)
-
-
-normalize :: (MonadThunkState ref m, MonadError String m) => ref -> m (Either ref ref)
-normalize = \r -> do
+normalize :: (MonadThunkState ref m, MonadError String m) => Bool -> ref -> m (Either ref ref)
+normalize toNF = \r -> do
     iT <- convertToThunks elIfTrue
     iF <- convertToThunks elIfFalse
     cL <- convertToThunks elCaseL
     cR <- convertToThunks elCaseR
     bImpl iT iF cL cR r
   where bImpl :: (MonadThunkState ref m, MonadError String m) => ref -> ref -> ref -> ref -> ref -> m (Either ref ref)
-        bImpl !ifTrueTh !ifFalseTh !caseL !caseR = impl HM.empty
+        bImpl !ifTrueTh !ifFalseTh !caseL !caseR = impl True LHM.empty
           where
-           impl !m !_thRef = do
-               traceM' $ return $ "Digged to thRef " ++ show _thRef ++ ", within context: " ++ (show m)
-               _thRef' <- trace' "@@ 0" . joinCtx m =<< getCached _thRef
+           getThref !m !_thRef = do
+               _thRef' <- joinCtx m =<< getCached _thRef
                if _thRef' /= _thRef
                   then traceM' $ return $ "Merged contexts, new thRef: " ++ show _thRef'
                   else return ()
-               repeatNorm' (withCache impl') _thRef'
-           impl' !thRef = do
+               return _thRef'
+           impl lb !m !_thRef = do
+               traceM' $ return $ "Digged to thRef " ++ show _thRef ++ ", within context: " ++ (show m)
+               repeatNorm' (withCache $ impl' lb) =<< getThref m _thRef
+           impl' lb !thRef = do
                  encloseCtx thRef
                  propagateCtx thRef
                  propagateCached thRef
                  traceM' $ thShowIdent 0 thRef >>= return . (++) "Traversing to expr = "
                  th <- getThunk thRef
                  let ctx = thContext th
+                     digBoth cons pTh qTh implL implR = implL ctx pTh >>= \c -> implR ctx qTh >>= res c
+                        where res (Right x) yE = rRes x $ either id id yE
+                              res (Left x) yE = either (lRes x) (rRes x) yE
+                              rRes pTh' qTh' = upd right $ cons pTh' qTh'
+                              lRes pTh' qTh' = if pTh /= pTh' || qTh /= qTh'
+                                                  then upd right $ cons pTh' qTh'
+                                                  else left thRef
+                     upd r e = updThunk thRef (\s -> s { thExpr = e }) >> r thRef
                  case thExpr th of
                      V !v -> let substVar varRef = do
                                    traceM' $ return . (("Substituting to var " ++ v ++ ": ") ++) =<< thShowIdent 0 varRef
-                                   varRef' <- trace' "@@ 1" $ joinCtx ctx varRef
+                                   varRef' <- joinCtx ctx varRef
                                    right varRef'
-                             in case v `HM.lookup` ctx of
+                             in case v `LHM.lookup` ctx of
                                   Just varRef -> substVar varRef
                                   _ -> left thRef
                      pTh :@ qTh -> do
@@ -84,12 +92,12 @@ normalize = \r -> do
                         qCtx <- thContext <$> getThunk qTh
                         let digLeft = trace' "digLeft" $ dig alterLeft pTh
                             digRight = trace' "digRight" $ dig alterRight qTh
-                            alterLeft !pTh' = updThunk thRef (\s -> s { thExpr = pTh' :@ qTh }) >> right thRef
-                            alterRight !qTh' = updThunk thRef (\s -> s { thExpr = pTh :@ qTh' }) >> right thRef
-                            dig alter !comp = impl ctx comp >>= either alter' alter
+                            alterLeft !pTh' = upd right (pTh' :@ qTh)
+                            alterRight !qTh' = upd right (pTh :@ qTh')
+                            dig alter !comp = impl False ctx comp >>= either alter' alter
                               where alter' comp' = if comp == comp'
-                                                   then left thRef
-                                                   else alter comp'
+                                                      then left thRef
+                                                      else alter comp'
                             synError = throwError . (++) "Can't normalize: " =<< thShowIdent 0 thRef
                         case p of
                           IOp _ -> case q of
@@ -110,22 +118,29 @@ normalize = \r -> do
                                   (V _) -> digRight
                                   e -> synError
                           PrL -> case q of
-                                   aTh :~ bTh -> right =<< joinCtx ctx =<< joinCtx qCtx aTh
+                                   aTh :~ _ -> right
+                                            -- =<< joinCtx ctx
+                                            =<< joinCtx qCtx aTh
                                    (_ :@ _) -> digRight
                                    (V _) -> digRight
                                    _ -> synError
                           PrR -> case q of
-                                   aTh :~ bTh -> right =<< joinCtx ctx =<< joinCtx qCtx bTh
+                                   _ :~ bTh -> right
+                                        -- =<< joinCtx ctx
+                                        =<< joinCtx qCtx bTh
                                    (_ :@ _) -> digRight
                                    (V _) -> digRight
                                    _ -> synError
                           (Abs v s) -> do
-                               qTh' <- trace' "@@ 6" $ joinCtx ctx qTh
-                               right =<< joinCtx ctx =<< joinCtx (HM.singleton v qTh') =<< joinCtx pCtx s
+                               --qTh' <- joinCtx ctx qTh
+                               right
+                                    -- =<< joinCtx ctx
+                                    =<< joinCtx pCtx
+                                    =<< joinCtx (LHM.singleton v qTh) s
                           Y -> do
-                               restTh <- newThunk th { thContext = HM.empty }
-                               updThunk thRef (\s -> s { thExpr = qTh :@ restTh })
-                               right thRef
+                             restTh <- newThunk th
+                             updThunk thRef (\s -> s { thExpr = qTh :@ restTh })
+                             right thRef
                           Case -> case q of
                                    qlTh :@ qrTh -> do propagateCached qlTh
                                                       ql <- thExpr <$> getThunk qlTh
@@ -140,6 +155,7 @@ normalize = \r -> do
                                                         (V _) -> digRight
                                                         _ -> synError
                                    _ -> synError
+                          _ :~ _ -> synError
                           plTh :@ prTh -> do propagateCached plTh
                                              propagateCached prTh
                                              pl <- thExpr <$> getThunk plTh
@@ -147,18 +163,30 @@ normalize = \r -> do
                                              case (pl, pr, q) of
                                               (IOp op, I i, I j) -> do
                                                 updThunk thRef (\s -> s { thExpr = I (iop op i j)
-                                                                        , thContext = HM.empty })
+                                                                        , thContext = LHM.empty })
                                                 right thRef
                                               (IOp _, I _, (_ :@ _)) -> digRight
                                               (IOp _, I _, V _) -> digRight
                                               (IOp _, I _, _) -> synError
                                               (OrdOp op, I i, I j) -> do
                                                 updThunk thRef (\s -> s { thExpr = B (ordOp op i j)
-                                                                        , thContext = HM.empty })
+                                                                        , thContext = LHM.empty })
                                                 right thRef
                                               (OrdOp _, I _, (_ :@ _)) -> digRight
                                               (OrdOp _, I _, V _) -> digRight
                                               (OrdOp _, I _, _) -> synError
                                               _ -> digLeft
                           _ -> digLeft
+                     pTh :~ qTh -> if toNF && lb
+                                      then digBoth (:~) pTh qTh (impl True) (impl True)
+                                      else left thRef
+                     Abs v e -> if toNF && lb
+                                   then do
+                                     e' <- impl True ctx e
+                                     case e' of
+                                       Left e'' -> if e'' /= e
+                                                      then upd right $ Abs v e''
+                                                      else left thRef
+                                       Right e'' -> upd right $ Abs v e''
+                                   else left thRef
                      _ -> left thRef

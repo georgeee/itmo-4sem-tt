@@ -77,8 +77,10 @@ main = do
     5 -> perLine opts ulParse $ show . convertToSKI
     6 -> full opts eqsParse $ showUnifyResult . unify
     7 -> perLine opts ulParse $ showSTResult . STL.findType
-    8 -> basicRunner' fullReader opts elParse 0 $ elNorm normalizeST
-    -8 -> basicRunner' fullReader opts elParse 0 $ elNorm normalizeSt
+    8 -> basicRunner' fullReader opts elParse 0 $ elNorm $ normalizeST False
+    -8 -> basicRunner' fullReader opts elParse 0 $ elNorm $ normalizeSt False
+    10 -> basicRunner' fullReader opts elParse 0 $ elNorm $ normalizeST True
+    -10 -> basicRunner' fullReader opts elParse 0 $ elNorm $ normalizeSt True
     9 -> basicRunner' fullReader opts elParse 0 algoW
 
 elNorm :: (ExtendedLambda -> Int -> Either String (Either ExtendedLambda ExtendedLambda)) -> ExtendedLambda -> Int -> String

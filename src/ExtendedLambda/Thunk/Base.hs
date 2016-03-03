@@ -36,7 +36,7 @@ repeatNorm' m = m >=> either left (toRight' . repeatNorm' m)
 toRight' :: Monad m => m (Either a a) -> m (Either a a)
 toRight' ma = ma >>= either right right
 
-type ThunkContext ref = HM.HashMap Var ref
+type ThunkContext ref = LHM.LinkedHashMap Var ref
 
 type ThunkId = Int
 
@@ -95,19 +95,6 @@ whenRight' = either left
 whenRight ma = either left (ma >=> right)
 whenLeft ma = either (ma >=> left) right
 
---withCache :: (MonadThunkState ref n) => (ref -> n ref) -> ref -> n ref
---withCache action thRef = logStepping thRef >> thNormalized' thRef >>= impl1
---  where impl1 Nothing = action' thRef `catchLeft` (setThNormalized thRef >=> left)
---        impl1 (Just thRef') = if thRef == thRef'
---                                 then trace' ("-- " ++ show thRef ++ " already normalized ") $ left thRef
---                                 else impl2 thRef' >>= setThNormalized thRef
---        impl2 thRef' = logStepping thRef' >> thNormalized' thRef' >>= impl3 >>= setThNormalized thRef'
---            where impl3 = maybe (action' thRef' `catchLeft` return) impl2
---        logStepping thRef = trace' ("-- stepping into " ++ show thRef) $ return thRef
---        logRepeatting thRef = trace' ("-- repeatting " ++ show thRef) $ return thRef
---        --action' - action, executed repeatedly with same thRef (till first left)
---        action' thRef = action thRef >>= toRight . action'' thRef
---        action'' thRef = setThNormalized thRef >=> \thRef' -> action thRef' >>= logRepeatting >>= action'' thRef'
 withCache :: (MonadThunkState ref n) => (ref -> n (Either ref ref)) -> ref -> n (Either ref ref)
 withCache action !thRef = logStepping thRef >> thNormalized' thRef >>= impl1
   where impl1 Nothing = action' thRef >>= whenLeft (setThNormalized thRef)
@@ -122,18 +109,17 @@ withCache action !thRef = logStepping thRef >> thNormalized' thRef >>= impl1
         action' thRef = action thRef >>= whenRight' (toRight' . action'' thRef)
         action'' thRef = setThNormalized thRef >=> \thRef' -> action thRef' >>= whenRight' (logRepeatting >=> action'' thRef')
 
-
-
 ctxInnerFV :: MonadThunkState ref m => ThunkContext ref -> m (HS.HashSet Var)
-ctxInnerFV = foldM (\b a -> HS.union b <$> thFree' a) HS.empty . HM.elems
+ctxInnerFV = foldM (\b a -> HS.union b <$> thFree' a) HS.empty . LHM.elems
 
 encloseCtx :: MonadThunkState ref m => ref -> m ()
 encloseCtx !thRef = do
       th <- getThunk thRef
       baseFV <- baseToFreeVars $ thExpr th
       let ctx = thContext th
-      ctx' <- traverse (joinCtx ctx) ctx
-      let ctx'' = HM.intersectionWith (const id) (HS.toMap baseFV) ctx'
+      ctx' <- foldM (\ctx k -> flip (LHM.insert k) ctx <$> joinCtx ctx (ctx LHM.! k)) ctx $ LHM.keys ctx
+      --ctx' <- traverse (joinCtx ctx) ctx
+      let ctx'' = LHM.intersectionWith (const id) (toMap $ HS.toList baseFV) ctx'
       updThunk thRef (\s -> s { thContext = ctx'' })
 
 -- thRef's ctx entries are assummed to be enclosed
@@ -142,37 +128,48 @@ propagateCtx !thRef = do
   th <- getThunk thRef
   base' <- propagateCtxToBase (thContext th) (thExpr th)
   case base' of
-    Just e -> updThunk thRef (\s -> s { thExpr = e, thContext = HM.empty })
+    Just e -> updThunk thRef (\s -> s { thExpr = e, thContext = LHM.empty })
     _ -> return ()
+
+-- ctx entries are assummed to be enclosed
+propagateCtxToBase :: MonadThunkState ref m => ThunkContext ref -> ExtendedLambdaBase ref -> m (Maybe (ExtendedLambdaBase ref))
+propagateCtxToBase !ctx (l :~ r)  = Just <$> ( (:~) <$> joinCtx ctx l <*> joinCtx ctx r )
+propagateCtxToBase !ctx (l :@ r)  = Just <$> ( (:@) <$> joinCtx ctx l <*> joinCtx ctx r )
+propagateCtxToBase !ctx (Abs v e) = Just <$> ( Abs v <$> joinCtx (LHM.delete v ctx) e   )
+propagateCtxToBase _ _ = return Nothing
 
 joinCtx :: MonadThunkState ref m => ThunkContext ref -> ref -> m ref
 joinCtx !ctx !thRef = do
       fv <- thFree' thRef
-      ctxFV <- ctxInnerFV (HM.intersectionWith (const id) (HS.toMap fv) ctx)
-      let fvMs = HS.toMap $ HS.union ctxFV fv
-          ctx' = HM.intersectionWith (const id) fvMs ctx
-      if HM.null ctx'
+      ctxFV <- ctxInnerFV (LHM.intersectionWith (const id) (toMap $ HS.toList fv) ctx)
+      let fvMs = toMap $ HS.toList ctxFV ++ HS.toList fv
+          ctx' = LHM.intersectionWith (const id) fvMs ctx
+      if LHM.null ctx'
          then return thRef
          else do
             traceM' $ do s' <- thShowIdent 0 thRef
                          c' <- showLBs 0 ctx'
-                         return $ "joinCtx " ++ show c' ++ " " ++ s'
+                         return $ "joinCtx " ++ show thRef ++ " ctx: " ++ show c' ++ " fv: " ++ show fv ++ " expr: " ++ s'
             th <- getThunk thRef
-            let l1 = HM.toList ctx'
-                l2 = HM.toList $ thContext th
-            newCtx <- HM.fromList <$> normalizeCtx HS.empty HM.empty (reverse $ l1 ++ l2)
-            trace' "Exitting joinCtx" $ newThunk $ th { thContext = newCtx }
+            let l1 = LHM.toList ctx'
+                l2 = LHM.toList $ thContext th
+            newCtx <- LHM.fromList . reverse <$> normalizeCtx HS.empty LHM.empty (reverse $ l1 ++ l2)
+            thRef' <- newThunk $ th { thContext = newCtx }
+            traceM' $ (++) "Exitting joinCtx: " <$> thShowIdent 0 thRef'
+            return thRef'
+
+toMap = LHM.fromList . map (flip (,) ())
 
 normalizeCtx :: MonadThunkState ref m => HS.HashSet Var -> ThunkContext ref -> [(Var, ref)] -> m [(Var, ref)]
 normalizeCtx _ rCtx [] = return []
 normalizeCtx vs rCtx ((v, e) : as) = if v `HS.member` vs
-                                        then normalizeCtx vs (HM.insert v e rCtx) as
+                                        then joinCtx (v `LHM.delete` rCtx) e >>= \e' -> normalizeCtx vs (LHM.insert v e' rCtx) as
                                         else (:) . (,) v <$> joinCtx rCtx e
                                                          <*> normalizeCtx (HS.insert v vs) rCtx as
 
 
 joinCtxM :: MonadThunkState ref m => ThunkContext ref -> ThunkContext ref -> m (ThunkContext ref)
-joinCtxM m ctx = HM.union ctx <$> mapM (joinCtx m) (HM.difference m ctx)
+joinCtxM m ctx = LHM.union ctx <$> mapM (joinCtx m) (LHM.difference m ctx)
 
 thShowIdent' :: MonadThunkState ref m => Int -> ExtendedLambdaBase ref -> m String
 thShowIdent' _ (I x) = return $ show x
@@ -213,7 +210,7 @@ thShowIdent :: MonadThunkState ref m => Int -> ref -> m String
 thShowIdent i thRef = do th <- getThunk thRef
                          let bs = thContext th
                              t = thExpr th
-                         if HM.null bs then ((show thRef ++ ":") ++) <$> thShowIdent' i t else let i' = i + 1 in do
+                         if LHM.null bs then ((show thRef ++ ":") ++) <$> thShowIdent' i t else let i' = i + 1 in do
                             lbs <- showLBs i' bs
                             t' <- thShowIdent' i' t
                             return $ concat [ (show thRef ++ ":")
@@ -221,7 +218,7 @@ thShowIdent i thRef = do th <- getThunk thRef
                                             , "\n" ++ (sps $ i' * 2 - 1) ++ "in " ++ t' ++ ")"
                                             ]
 showLBs :: MonadThunkState ref m => Int -> ThunkContext ref -> m [String]
-showLBs i = mapM (\(v, s) -> ((v ++ " = ") ++) <$> thShowIdent i s) . HM.toList
+showLBs i = mapM (\(v, s) -> ((v ++ " = ") ++) <$> thShowIdent i s) . LHM.toList
 
 p i s = (replicate (i*2) ' ') ++ s
 sps = flip replicate ' '
@@ -231,8 +228,8 @@ convertFromThunks = getThunk >=> impl1
   where
     impl1 :: MonadThunkState ref m => Thunk ref -> m ExtendedLambda
     impl1 Thunk { thExpr = base , thContext = ctx } = (::=) <$> convertCtx ctx <*> convertBase base
-    convertCtx :: MonadThunkState ref m => (HM.HashMap Var ref) -> m ELContext
-    convertCtx ctx = LHM.fromList <$> mapM (\(v, e) -> (,) v <$> convertFromThunks e) (HM.toList ctx)
+    convertCtx :: MonadThunkState ref m => (ThunkContext ref) -> m ELContext
+    convertCtx ctx = LHM.fromList <$> mapM (\(v, e) -> (,) v <$> convertFromThunks e) (LHM.toList ctx)
     convertBase :: MonadThunkState ref m => (ExtendedLambdaBase ref) -> m (ExtendedLambdaBase ExtendedLambda)
     convertBase (I i) = return $ I i
     convertBase (B b) = return $ B b
@@ -288,7 +285,7 @@ computeThunkFV' base ctx = do
     ctxFV <- ctxInnerFV ctx
     baseFV <- baseToFreeVars base
     return $ (ctxFV `HS.union` baseFV) `HS.difference` ctxVars
-  where ctxVars = HS.fromList $ HM.keys ctx
+  where ctxVars = HS.fromList $ LHM.keys ctx
 
 propagateCached :: MonadThunkState ref m => ref -> m ()
 propagateCached !thRef = thExpr <$> getThunk thRef >>= impl >>= \b -> updThunk thRef (\s -> s { thExpr = b })
@@ -304,13 +301,6 @@ propagateCached !thRef = thExpr <$> getThunk thRef >>= impl >>= \b -> updThunk t
 thFree' :: MonadThunkState ref m => ref -> m (HS.HashSet Var)
 thFree' !thRef = thFree <$> getThunk thRef
 
--- ctx entries are assummed to be enclosed
-propagateCtxToBase :: MonadThunkState ref m => ThunkContext ref -> ExtendedLambdaBase ref -> m (Maybe (ExtendedLambdaBase ref))
-propagateCtxToBase !ctx (l :~ r)  = Just <$> ( (:~) <$> joinCtx ctx l <*> joinCtx ctx r )
-propagateCtxToBase !ctx (l :@ r)  = Just <$> ( (:@) <$> joinCtx ctx l <*> joinCtx ctx r )
-propagateCtxToBase !ctx (Abs v e) = Just <$> ( Abs v <$> joinCtx (HM.delete v ctx) e    )
-propagateCtxToBase _ _ = return Nothing
-
 baseToFreeVars :: MonadThunkState ref m => ExtendedLambdaBase ref -> m (HS.HashSet Var)
 baseToFreeVars (l :~ r) = HS.union <$> thFree' l <*> thFree' r
 baseToFreeVars (l :@ r) = HS.union <$> thFree' l <*> thFree' r
@@ -318,6 +308,6 @@ baseToFreeVars (Abs v e) = HS.delete v <$> thFree' e
 baseToFreeVars (V v) = return $ HS.singleton v
 baseToFreeVars _ = return HS.empty
 
-convertCtx :: MonadThunkState ref m => ELContext -> m (HM.HashMap Var ref)
-convertCtx ctx = HM.fromList <$> mapM (\(v, e) -> (,) v <$> convertToThunks e) (LHM.toList ctx)
+convertCtx :: MonadThunkState ref m => ELContext -> m (ThunkContext ref)
+convertCtx ctx = LHM.fromList <$> mapM (\(v, e) -> (,) v <$> convertToThunks e) (LHM.toList ctx)
 

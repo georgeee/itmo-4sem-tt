@@ -179,9 +179,9 @@ normalizeRecursion e = snd <$> impl e
                      else freshId >>= \n ->
                        let replacement = noContext $ foldr' (\a b -> noContext b :@ noContext (V a)) (V n) (reverse $ map fst fv'')
                            (eR, fv'') = replaceSeq fv' e'
-                           eA = foldr' (\v e -> noContext $ Abs v e) eR $ map snd fv''
+                           eA = foldr' (\v e -> noContext $ Abs v e) (resE eR) $ map snd fv''
                         in insertWithReplace x replacement rm
-                            >>= \rm' -> return (resFV, ((n ,resE eA) : bs, rm', (x, replacement) : newLbs))
+                            >>= \rm' -> return (resFV, ((n , eA) : bs, rm', (x, replacement) : newLbs))
 
 -- replaces all usages of vars from map to numerated synonyms, returns list of replacements
 replaceSeq :: HM.HashMap Var a -> ExtendedLambda -> (ExtendedLambda, [(Var, Var)])
