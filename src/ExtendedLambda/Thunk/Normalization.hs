@@ -55,6 +55,12 @@ stripNormalized thRef = do
   --updThunk thRef (\s -> s { thNormalized = Nothing, thExpr = e' })
   return thRef
 
+traceM'' :: Monad m => m String -> m ()
+--traceM'' = const $ return ()
+--trace'' x y = y
+traceM'' = (=<<) traceM
+trace'' = trace
+
 normalize :: (MonadThunkState ref m, MonadError String m) => Bool -> ref -> m ref
 normalize toNF = \r -> do
     iT <- convertToThunks elIfTrue
@@ -79,6 +85,7 @@ normalize toNF = \r -> do
            implHNF e = either id id <$> impl LHM.empty e
            implNF = implHNF >=> getCached >=> stripNormalized
                       >=> \thRef' -> do
+                             traceM''$ return . ((++) "Normalized to HNF: ") =<< thShowIdent 0 thRef'
                              th <- getThunk thRef'
                              e' <- case thExpr th of
                                a :~ b -> (:~) <$> implNF a <*> implNF b
