@@ -15,6 +15,7 @@ import Control.Monad.Error.Class (catchError, MonadError, throwError)
 import Control.Monad.Trans.Either hiding (left, right)
 import Control.Monad.Trans.Except (Except, runExcept)
 import qualified "unordered-containers" Data.HashMap.Strict as HM
+import qualified "unordered-containers" Data.HashSet as HS
 import ExtendedLambda.Types
 import ExtendedLambda.Base
 import Control.Monad.State.Strict
@@ -40,20 +41,6 @@ chain toNF e i = chain' toNF $ evalState (normalizeRecursion e) i
 
 chain' :: (MonadThunkState ref m, MonadError String m) => Bool -> ExtendedLambda -> m ExtendedLambda
 chain' toNF  = convertToThunks >=> normalize toNF >=> convertFromThunks
-
-stripNormalized :: (MonadThunkState ref m, MonadError String m) => ref -> m ref
-stripNormalized thRef = do
-  encloseCtx thRef
-  propagateCtx thRef
-  propagateCached thRef
-  --th <- getThunk thRef
-  --e' <- case thExpr th of
-  --   a :~ b -> (:~) <$> stripNormalized a <*> stripNormalized b
-  --   a :@ b -> (:@) <$> stripNormalized a <*> stripNormalized b
-  --   Abs v s -> Abs v <$> stripNormalized s
-  --   e -> return e
-  --updThunk thRef (\s -> s { thNormalized = Nothing, thExpr = e' })
-  return thRef
 
 traceM'' :: Monad m => m String -> m ()
 --traceM'' = const $ return ()
@@ -82,9 +69,29 @@ normalize toNF = \r -> do
                thRef <- getThref m _thRef
                th <- getThunk thRef
                repeatNorm' (withCache $ impl') thRef
-           implHNF e = either id id <$> impl LHM.empty e
-           implNF = implHNF >=> getCached >=> stripNormalized
+           implHNF e = do
+              fvs <- thFree' e
+              repls <- mapM (\v -> (,) v . (++) "___" . show <$> nextThunkId) $ HS.toList fvs
+              ctx <- LHM.fromList <$> mapM (\(v, v') -> (,) v <$> genNewVarThref v') repls
+              thRef' <- either id id <$> impl ctx e
+              th' <- getThunk thRef'
+              let ctx' = foldr' LHM.delete (thContext th') fvs
+              ctx'' <- foldM (\b (v, v') -> flip (LHM.insert v') b <$> genNewVarThref v) ctx' repls
+              fv' <- computeThunkFV' (thExpr th') (thContext th')
+              updThunk thRef' (\s -> s { thContext = ctx'', thFree = fv' })
+              return thRef'
+
+           genNewVarThref v' = newThunk Thunk { thId = undefined
+                                              , thFree = undefined
+                                              , thNormalized = undefined
+                                              , thExpr = V v'
+                                              , thContext = LHM.empty
+                                              }
+           implNF = implHNF >=> getCached
                       >=> \thRef' -> do
+                             encloseCtx thRef'
+                             propagateCtx thRef'
+                             propagateCached thRef'
                              traceM''$ return . ((++) "Normalized to HNF: ") =<< thShowIdent 0 thRef'
                              th <- getThunk thRef'
                              e' <- case thExpr th of
@@ -93,7 +100,10 @@ normalize toNF = \r -> do
                                Abs v s -> Abs v <$> implNF s
                                e -> return e
                              updThunk thRef' (\s -> s { thExpr = e' })
-                             stripNormalized thRef'
+                             encloseCtx thRef'
+                             propagateCtx thRef'
+                             propagateCached thRef'
+                             return thRef'
            impl' !thRef = do
                  encloseCtx thRef
                  propagateCtx thRef
