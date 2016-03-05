@@ -46,13 +46,13 @@ stripNormalized thRef = do
   encloseCtx thRef
   propagateCtx thRef
   propagateCached thRef
-  th <- getThunk thRef
-  e' <- case thExpr th of
-     a :~ b -> (:~) <$> stripNormalized a <*> stripNormalized b
-     a :@ b -> (:@) <$> stripNormalized a <*> stripNormalized b
-     Abs v s -> Abs v <$> stripNormalized s
-     e -> return e
-  updThunk thRef (\s -> s { thNormalized = Nothing, thExpr = e' })
+  --th <- getThunk thRef
+  --e' <- case thExpr th of
+  --   a :~ b -> (:~) <$> stripNormalized a <*> stripNormalized b
+  --   a :@ b -> (:@) <$> stripNormalized a <*> stripNormalized b
+  --   Abs v s -> Abs v <$> stripNormalized s
+  --   e -> return e
+  --updThunk thRef (\s -> s { thNormalized = Nothing, thExpr = e' })
   return thRef
 
 normalize :: (MonadThunkState ref m, MonadError String m) => Bool -> ref -> m ref
