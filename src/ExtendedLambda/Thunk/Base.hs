@@ -17,6 +17,7 @@ import ExtendedLambda.Types
 import ExtendedLambda.Base
 import Data.Hashable
 import Control.Monad
+import Data.Foldable as F
 
 traceM' :: Monad m => m String -> m ()
 traceM' = const $ return ()
@@ -119,46 +120,80 @@ encloseCtx !thRef = do
       let ctx = thContext th
       ctx' <- foldM (\ctx k -> flip (LHM.insert k) ctx <$> joinCtx ctx (ctx LHM.! k)) ctx $ LHM.keys ctx
       --ctx' <- traverse (joinCtx ctx) ctx
-      let ctx'' = LHM.intersectionWith (const id) (toMap $ HS.toList baseFV) ctx'
+      let ctx'' = ctxFilter ctx' baseFV
       updThunk thRef (\s -> s { thContext = ctx'' })
 
 -- thRef's ctx entries are assummed to be enclosed
-propagateCtx :: MonadThunkState ref m => ref -> m ()
+propagateCtx :: MonadThunkState ref m => ref -> m ref
 propagateCtx !thRef = do
+  encloseCtx thRef
+  propagateCached thRef
   th <- getThunk thRef
-  base' <- propagateCtxToBase (thContext th) (thExpr th)
-  case base' of
-    Just e -> updThunk thRef (\s -> s { thExpr = e, thContext = LHM.empty })
-    _ -> return ()
+  let ctx = thContext th
+  e <-
+    if F.null ctx
+     then return thRef
+     else do
+       ctxFv <- ctxInnerFV ctx
+       let updBase e = updThunk thRef (\s -> s { thExpr = e, thContext = LHM.empty }) >> return e
+       base' <- if F.null ctxFv
+                   then return $ thExpr th
+                   else propagateChildrenCtx ctxFv (thExpr th) >>= updBase
+       case base' of
+          (l :~ r)  -> ( (:~) <$> joinCtx ctx l <*> joinCtx ctx r ) >>= updBase >> return thRef
+          (l :@ r)  -> ( (:@) <$> joinCtx ctx l <*> joinCtx ctx r ) >>= updBase >> return thRef
+          (Abs v e) -> ( Abs v <$> joinCtx (LHM.delete v ctx) e   ) >>= updBase >> return thRef
+          (V v) -> if v `LHM.member` ctx
+                      then joinCtx (v `LHM.delete` ctx) (ctx LHM.! v) >>= propagateCtx >>= setThNormalized thRef
+                      else return thRef
+          _ -> return thRef
+  --traceM . (++) ("propagateCtx " ++ show thRef ++ ": ") =<< thShowIdent 0 e
+  return e
 
--- ctx entries are assummed to be enclosed
-propagateCtxToBase :: MonadThunkState ref m => ThunkContext ref -> ExtendedLambdaBase ref -> m (Maybe (ExtendedLambdaBase ref))
-propagateCtxToBase !ctx (l :~ r)  = Just <$> ( (:~) <$> joinCtx ctx l <*> joinCtx ctx r )
-propagateCtxToBase !ctx (l :@ r)  = Just <$> ( (:@) <$> joinCtx ctx l <*> joinCtx ctx r )
-propagateCtxToBase !ctx (Abs v e) = Just <$> ( Abs v <$> joinCtx (LHM.delete v ctx) e   )
-propagateCtxToBase _ _ = return Nothing
+propagateChildrenCtx :: (MonadThunkState ref m, Foldable f, Show (f Var)) => f Var -> ExtendedLambdaBase ref -> m (ExtendedLambdaBase ref)
+propagateChildrenCtx fv = impl
+  where impl (l :~ r) = (:~) <$> impl' l <*> impl' r
+        impl (l :@ r) = (:@) <$> impl' l <*> impl' r
+        impl (Abs v e) = Abs v <$> impl' e
+        impl b = return b
+        impl' = propagateCtx
+
+ctxFilter ctx fv = LHM.intersectionWith (const id) (toMap fv) ctx
 
 joinCtx :: MonadThunkState ref m => ThunkContext ref -> ref -> m ref
 joinCtx !ctx !thRef = do
-      fv <- thFree' thRef
-      ctxFV <- ctxInnerFV (LHM.intersectionWith (const id) (toMap $ HS.toList fv) ctx)
-      let fvMs = toMap $ HS.toList ctxFV ++ HS.toList fv
-          ctx' = LHM.intersectionWith (const id) fvMs ctx
-      if LHM.null ctx'
+      if F.null ctx
          then return thRef
          else do
-            traceM' $ do s' <- thShowIdent 0 thRef
-                         c' <- showLBs 0 ctx'
-                         return $ "joinCtx " ++ show thRef ++ " ctx: " ++ show c' ++ " fv: " ++ show fv ++ " expr: " ++ s'
             th <- getThunk thRef
-            let l1 = LHM.toList ctx'
-                l2 = LHM.toList $ thContext th
-            newCtx <- LHM.fromList . reverse <$> normalizeCtx HS.empty LHM.empty (reverse $ l1 ++ l2)
-            thRef' <- newThunk $ th { thContext = newCtx }
-            traceM' $ (++) "Exitting joinCtx: " <$> thShowIdent 0 thRef'
-            return thRef'
+            --case thExpr th of
+            --  V v -> do
+            --    encloseCtx thRef
+            --    th' <- getThunk thRef
+            --    case v `LHM.lookup` thContext th' of
+            --      Nothing -> case v `LHM.lookup` ctx of
+            --                    Just e -> joinCtx ctx e
+            --                    _ -> updThunk thRef (\s -> s { thContext = LHM.empty }) >> return thRef
+            --      Just e -> joinCtx (thContext th) e >>= joinCtx ctx
+            --  _ -> do
+            let fv = thFree th
+            ctxFV <- ctxInnerFV $ ctxFilter ctx fv
+            let ctx' = ctxFilter ctx $ HS.toList ctxFV ++ HS.toList fv
+            if F.null ctx'
+               then return thRef
+               else do
+                  traceM' $ do s' <- thShowIdent 0 thRef
+                               c' <- showLBs 0 ctx'
+                               return $ "joinCtx " ++ show thRef ++ " ctx: " ++ show c' ++ " fv: " ++ show fv ++ " expr: " ++ s'
+                  let l1 = LHM.toList ctx'
+                      l2 = LHM.toList $ thContext th
+                  newCtx <- LHM.fromList . reverse <$> normalizeCtx HS.empty LHM.empty (reverse $ l1 ++ l2)
+                  thRef' <- newThunk $ th { thContext = newCtx }
+                  traceM' $ (++) "Exitting joinCtx: " <$> thShowIdent 0 thRef'
+                  return thRef'
 
-toMap = LHM.fromList . map (flip (,) ())
+toMap :: (Foldable f, Eq a, Hashable a) => f a -> LHM.LinkedHashMap a ()
+toMap = LHM.fromList . foldr' ((:) . flip (,) ()) []
 
 normalizeCtx :: MonadThunkState ref m => HS.HashSet Var -> ThunkContext ref -> [(Var, ref)] -> m [(Var, ref)]
 normalizeCtx _ rCtx [] = return []

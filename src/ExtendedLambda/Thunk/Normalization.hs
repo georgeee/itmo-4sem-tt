@@ -69,16 +69,28 @@ normalize toNF = \r -> do
                thRef <- getThref m _thRef
                th <- getThunk thRef
                repeatNorm' (withCache $ impl') thRef
-           implHNF e = do
-              fvs <- thFree' e
+
+           prBeforeHNF thRef = do traceM''$ return . ((++) "Expr for HNF: ") =<< thShowIdent 0 thRef
+                                  return thRef
+           implHNF = prBeforeHNF >=> propagateCtx >=> \thRef -> do
+              traceM''$ return . ((++) "Expr for HNF (ctx propagated): ") =<< thShowIdent 0 thRef
+              fvs <- thFree' thRef
               repls <- mapM (\v -> (,) v . (++) "___" . show <$> nextThunkId) $ HS.toList fvs
-              ctx <- LHM.fromList <$> mapM (\(v, v') -> (,) v <$> genNewVarThref v') repls
-              thRef' <- either id id <$> impl ctx e
+              th <- getThunk thRef
+              ctx <- foldM (\b (v, v') -> flip (LHM.insert v) b <$> genNewVarThref v') (thContext th) repls
+              thFv <- computeThunkFV' (thExpr th) ctx
+              updThunk thRef (\s -> s { thContext = ctx, thFree = thFv })
+
+              traceM''$ return . ((++) "Prepared for HNF: ") =<< thShowIdent 0 thRef
+              thRef' <- either id id <$> impl ctx thRef
+              traceM''$ return . ((++) "After HNF: ") =<< thShowIdent 0 thRef'
+
               th' <- getThunk thRef'
               let ctx' = foldr' LHM.delete (thContext th') fvs
               ctx'' <- foldM (\b (v, v') -> flip (LHM.insert v') b <$> genNewVarThref v) ctx' repls
               fv' <- computeThunkFV' (thExpr th') (thContext th')
               updThunk thRef' (\s -> s { thContext = ctx'', thFree = fv' })
+              traceM''$ return . ((++) "Normalized to HNF: ") =<< thShowIdent 0 thRef'
               return thRef'
 
            genNewVarThref v' = newThunk Thunk { thId = undefined
@@ -87,12 +99,9 @@ normalize toNF = \r -> do
                                               , thExpr = V v'
                                               , thContext = LHM.empty
                                               }
-           implNF = implHNF >=> getCached
+           implNF = implHNF >=> getCached >=> propagateCtx
                       >=> \thRef' -> do
-                             encloseCtx thRef'
-                             propagateCtx thRef'
-                             propagateCached thRef'
-                             traceM''$ return . ((++) "Normalized to HNF: ") =<< thShowIdent 0 thRef'
+                             traceM''$ return . ((++) "Normalized to HNF, ctx propagated: ") =<< thShowIdent 0 thRef'
                              th <- getThunk thRef'
                              e' <- case thExpr th of
                                a :~ b -> (:~) <$> implNF a <*> implNF b
@@ -100,14 +109,8 @@ normalize toNF = \r -> do
                                Abs v s -> Abs v <$> implNF s
                                e -> return e
                              updThunk thRef' (\s -> s { thExpr = e' })
-                             encloseCtx thRef'
                              propagateCtx thRef'
-                             propagateCached thRef'
-                             return thRef'
-           impl' !thRef = do
-                 encloseCtx thRef
-                 propagateCtx thRef
-                 propagateCached thRef
+           impl' = propagateCtx >=> \thRef -> do
                  traceM' $ thShowIdent 0 thRef >>= return . (++) "Traversing to expr = "
                  th <- getThunk thRef
                  let ctx = thContext th
@@ -115,7 +118,7 @@ normalize toNF = \r -> do
                  case thExpr th of
                      V !v -> let substVar varRef = do
                                    traceM' $ return . (("Substituting to var " ++ v ++ ": ") ++) =<< thShowIdent 0 varRef
-                                   varRef' <- joinCtx ctx varRef
+                                   varRef' <- joinCtx (v `LHM.delete` ctx) varRef
                                    right varRef'
                              in case v `LHM.lookup` ctx of
                                   Just varRef -> substVar varRef
