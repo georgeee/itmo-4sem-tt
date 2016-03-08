@@ -9,7 +9,7 @@ import ExtendedLambda.Thunk.Base
 import qualified ExtendedLambda.Thunk.State as ThSt
 import qualified ExtendedLambda.Thunk.ST as ThST
 import Control.Monad.State.Class
-import Data.Foldable
+import Data.Foldable as F
 import Common
 import Control.Monad.Error.Class (catchError, MonadError, throwError)
 import Control.Monad.Trans.Either hiding (left, right)
@@ -43,10 +43,10 @@ chain' :: (MonadThunkState ref m, MonadError String m) => Bool -> ExtendedLambda
 chain' toNF  = convertToThunks >=> normalize toNF >=> convertFromThunks
 
 traceM'' :: Monad m => m String -> m ()
---traceM'' = const $ return ()
---trace'' x y = y
-traceM'' = (=<<) traceM
-trace'' = trace
+traceM'' = const $ return ()
+trace'' x y = y
+--traceM'' = (=<<) traceM
+--trace'' = trace
 
 normalize :: (MonadThunkState ref m, MonadError String m) => Bool -> ref -> m ref
 normalize toNF = \r -> do
@@ -58,39 +58,28 @@ normalize toNF = \r -> do
   where bImpl :: (MonadThunkState ref m, MonadError String m) => ref -> ref -> ref -> ref -> ref -> m ref
         bImpl !ifTrueTh !ifFalseTh !caseL !caseR = if toNF then implNF else implHNF
           where
-           getThref !m !_thRef = do
-               _thRef' <- joinCtx m =<< getCached _thRef
-               if _thRef' /= _thRef
-                  then traceM' $ return $ "Merged contexts, new thRef: " ++ show _thRef'
-                  else return ()
-               return _thRef'
-           impl !m !_thRef = do
-               traceM' $ return $ "Digged to thRef " ++ show _thRef ++ ", within context: " ++ (show m)
-               thRef <- getThref m _thRef
-               th <- getThunk thRef
-               repeatNorm' (withCache $ impl') thRef
+           impl = getCached >=> repeatNorm' (withCache impl')
 
-           prBeforeHNF thRef = do traceM''$ return . ((++) "Expr for HNF: ") =<< thShowIdent 0 thRef
+           prBeforeHNF thRef = do traceM''$ (++) "Expr for HNF: " <$> thShowIdent 0 thRef
                                   return thRef
-           implHNF = prBeforeHNF >=> propagateCtx >=> \thRef -> do
-              traceM''$ return . ((++) "Expr for HNF (ctx propagated): ") =<< thShowIdent 0 thRef
-              fvs <- thFree' thRef
+           implHNF = prBeforeHNF >=> propagateCtx >=> \_thRef -> do
+              traceM''$ (++) "Expr for HNF (ctx propagated): " <$> thShowIdent 0 _thRef
+              _th <- getThunk _thRef
+              let fvs = thFree _th
               repls <- mapM (\v -> (,) v . (++) "___" . show <$> nextThunkId) $ HS.toList fvs
-              th <- getThunk thRef
-              ctx <- foldM (\b (v, v') -> flip (LHM.insert v) b <$> genNewVarThref v') (thContext th) repls
-              thFv <- computeThunkFV' (thExpr th) ctx
-              updThunk thRef (\s -> s { thContext = ctx, thFree = thFv })
+              ctx <- foldM (\b (v, v') -> flip (LHM.insert v) b <$> genNewVarThref v') (thContext _th) repls
+              thRef <- joinCtx ctx _thRef
 
-              traceM''$ return . ((++) "Prepared for HNF: ") =<< thShowIdent 0 thRef
-              thRef' <- either id id <$> impl ctx thRef
-              traceM''$ return . ((++) "After HNF: ") =<< thShowIdent 0 thRef'
+              traceM''$ (++) "Prepared for HNF: " <$> thShowIdent 0 thRef
+              _thRef' <- either id id <$> impl thRef >>= propagateCtx
+              traceM''$ (++) "After HNF: " <$> thShowIdent 0 _thRef'
 
-              th' <- getThunk thRef'
-              let ctx' = foldr' LHM.delete (thContext th') fvs
-              ctx'' <- foldM (\b (v, v') -> flip (LHM.insert v') b <$> genNewVarThref v) ctx' repls
-              fv' <- computeThunkFV' (thExpr th') (thContext th')
-              updThunk thRef' (\s -> s { thContext = ctx'', thFree = fv' })
-              traceM''$ return . ((++) "Normalized to HNF: ") =<< thShowIdent 0 thRef'
+              _th' <- getThunk _thRef'
+              let ctx' = foldr' LHM.delete (thContext _th') fvs
+                  free' = thFree _th'
+              ctx'' <- foldM (\b (v, v') -> if v' `HS.member` free' then flip (LHM.insert v') b <$> genNewVarThref v else return b) ctx' repls
+              thRef' <- joinCtx ctx'' _thRef'
+              traceM''$ (++) "Normalized to HNF: " <$> thShowIdent 0 thRef'
               return thRef'
 
            genNewVarThref v' = newThunk Thunk { thId = undefined
@@ -101,7 +90,7 @@ normalize toNF = \r -> do
                                               }
            implNF = implHNF >=> getCached >=> propagateCtx
                       >=> \thRef' -> do
-                             traceM''$ return . ((++) "Normalized to HNF, ctx propagated: ") =<< thShowIdent 0 thRef'
+                             traceM''$ (++) "Normalized to HNF, ctx propagated: " <$> thShowIdent 0 thRef'
                              th <- getThunk thRef'
                              e' <- case thExpr th of
                                a :~ b -> (:~) <$> implNF a <*> implNF b
@@ -111,18 +100,14 @@ normalize toNF = \r -> do
                              updThunk thRef' (\s -> s { thExpr = e' })
                              propagateCtx thRef'
            impl' = propagateCtx >=> \thRef -> do
-                 traceM' $ thShowIdent 0 thRef >>= return . (++) "Traversing to expr = "
+                 traceM' $ (++) "Traversing to expr = " <$> thShowIdent 0 thRef
                  th <- getThunk thRef
-                 let ctx = thContext th
-                     upd r e = updThunk thRef (\s -> s { thExpr = e }) >> r thRef
+                 if F.null (thContext th)
+                    then return ()
+                    else throwError . (++) "Invalid branch: ctx isn't propagated properly, " =<< thShowIdent 0 thRef
+                 let upd r e = updThunk thRef (\s -> s { thExpr = e }) >> r thRef
+                     synError = throwError . (++) "Can't normalize: " =<< thShowIdent 0 thRef
                  case thExpr th of
-                     V !v -> let substVar varRef = do
-                                   traceM' $ return . (("Substituting to var " ++ v ++ ": ") ++) =<< thShowIdent 0 varRef
-                                   varRef' <- joinCtx (v `LHM.delete` ctx) varRef
-                                   right varRef'
-                             in case v `LHM.lookup` ctx of
-                                  Just varRef -> substVar varRef
-                                  _ -> left thRef
                      pTh :@ qTh -> do
                         propagateCached pTh
                         propagateCached qTh
@@ -134,11 +119,10 @@ normalize toNF = \r -> do
                             digRight = trace' "digRight" $ dig alterRight qTh
                             alterLeft !pTh' = upd right (pTh' :@ qTh)
                             alterRight !qTh' = upd right (pTh :@ qTh')
-                            dig alter !comp = impl ctx comp >>= either alter' alter
+                            dig alter !comp = impl comp >>= either alter' alter
                               where alter' comp' = if comp == comp'
                                                       then left thRef
                                                       else alter comp'
-                            synError = throwError . (++) "Can't normalize: " =<< thShowIdent 0 thRef
                         case p of
                           IOp _ -> case q of
                                       (_ :@ _) -> digRight

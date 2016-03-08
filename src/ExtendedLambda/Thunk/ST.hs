@@ -36,7 +36,7 @@ instance Monad m => MonadThunkId (ThunkSTT s m) where
   nextThunkId = ask >>= \r -> lift (readSTRef r) >>= \c -> lift (writeSTRef r (c + 1)) >> return c
 
 instance Monad m => MonadThunkState (ThunkRef s) (ThunkSTT s m) where
-  updThunk (ThunkRef r _) f = lift $ readSTRef r >>= writeSTRef r . f
+  updThunk ref@(ThunkRef r _) f = trace' ("updThunk " ++ show ref) $ lift $ readSTRef r >>= writeSTRef r . f
   addThunk th = lift $ flip ThunkRef (thId th) <$> newSTRef th
   getThunk (ThunkRef r _) = lift $ readSTRef r
 
