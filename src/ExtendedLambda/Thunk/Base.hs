@@ -20,10 +20,10 @@ import Control.Monad
 import Data.Foldable as F
 
 traceM' :: Monad m => m String -> m ()
---traceM' = const $ return ()
---trace' x y = y
-traceM' = (=<<) traceM
-trace' = trace
+traceM' = const $ return ()
+trace' x y = y
+--traceM' = (=<<) traceM
+--trace' = trace
 
 left :: Monad m => a -> m (Either a b)
 left = return . Left
