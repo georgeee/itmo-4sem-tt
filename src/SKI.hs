@@ -1,7 +1,6 @@
 {-# LANGUAGE PackageImports, FlexibleContexts #-}
 module SKI where
 
-import Debug.Trace
 import Data.Either(isRight)
 import Data.Maybe (isJust)
 import UntypedLambda
@@ -46,23 +45,23 @@ testSKIUlParse = testUlParse . (\s -> "(\\S.\\K.\\I. " ++ s ++ ") (\\x.\\y.\\z.x
 convertToSKI :: UntypedLambda -> SKI
 convertToSKI = impl
  where
-  impl (ULVar v) = trace ("ULVar v : " ++ (show v)) $ V v
-  impl (ULApp l r) = trace ("ULApp : " ++ (show (l,r,res))) $ res
+  impl (ULVar v) = V v
+  impl (ULApp l r) = res
       where res = impl l :@ impl r
-  impl (ULAbs v e) = trace ("ULAbs : " ++ (show (v,e,e',lifted))) $ close e' lifted
+  impl (ULAbs v e) = close e' lifted
     where e' = impl e
           lifted = liftUp v e'
-  liftUp v (V u) = trace ("V v : " ++ (show (v, u))) $ if u == v then Just I else Nothing
+  liftUp v (V u) = if u == v then Just I else Nothing
   liftUp v (l :@ r) = let l' = liftUp v l
                           r' = liftUp v r
-                       in trace ("l :@ r : " ++ (show (v, l, l', r, r'))) $ if isJust l' || isJust r'
+                       in if isJust l' || isJust r'
                              then Just $ s (open l l') (open r r')
                              else Nothing
       where s (K :@ K) I = K
             s (K :@ I) K = K
             s (K :@ I) I = I
             s x y = S :@ x :@ y
-  liftUp v e = trace ("other " ++ (show (v, e))) $ Nothing
+  liftUp v e = Nothing
   open e = maybe (K :@ e) id
   close e = maybe (K :@ e) s
     where --s I = I

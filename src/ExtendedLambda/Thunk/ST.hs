@@ -10,7 +10,7 @@ import Control.Monad.Error.Class (catchError)
 import Control.Monad.Trans.Either (left, EitherT)
 import Control.Monad.Trans.Except (throwE)
 import Data.List
-import Debug.Trace
+import Data.Maybe
 import Common
 import qualified "unordered-containers" Data.HashMap.Strict as HM
 import qualified "unordered-containers" Data.HashSet as HS
@@ -38,7 +38,11 @@ instance Monad m => MonadThunkId (ThunkSTT s m) where
 instance Monad m => MonadThunkState (ThunkRef s) (ThunkSTT s m) where
   updThunk ref@(ThunkRef r _) f = trace' ("updThunk " ++ show ref) $ lift $ readSTRef r >>= writeSTRef r . f
   addThunk th = lift $ flip ThunkRef (thId th) <$> newSTRef th
-  getThunk (ThunkRef r _) = lift $ readSTRef r
+  getThunk ref@(ThunkRef r _) = lift $ readSTRef r >>= \th -> do
+                                      if isJust (thNormalized th)
+                                         then traceM' $ pure $ "Warning: thunk is cached, but is being retreived directly, " ++ show ref
+                                         else return ()
+                                      return th
 
 evalThunkSTT :: Monad m => (forall s. ThunkSTT s m a) -> m a
 evalThunkSTT m = runST $ runReaderT m =<< newSTRef 0

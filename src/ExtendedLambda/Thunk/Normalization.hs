@@ -48,6 +48,41 @@ trace'' x y = y
 --traceM'' = (=<<) traceM
 --trace'' = trace
 
+renameVars :: (MonadThunkState ref m, MonadError String m) => ref -> m ref
+renameVars = impl HM.empty
+  where impl fvs thRef = do
+            th <- getThunk thRef
+            e' <- case thExpr th of
+              (l :~ r) -> (:~) <$> impl fvs l <*> impl fvs r
+              (l :@ r) -> (:@) <$> impl fvs l <*> impl fvs r
+              (Abs v e) -> Abs v' <$> impl fvs' e
+                where (v', fvs') = rV v fvs
+              (V v) -> pure $ V $ gV v fvs
+              e -> pure e
+            ctx' <- traverse (impl fvs) (thContext th)
+            updThunk thRef (\s -> s { thExpr = e', thContext = ctx' })
+            return thRef
+        gV :: Var -> HM.HashMap Var Int -> Var
+        gV v fvs = case v `HM.lookup` fvs of
+                         Just 0 -> v
+                         Just i -> "_" ++ v ++ show (i - 1)
+                         _ -> v
+        rV :: Var -> HM.HashMap Var Int -> (Var, HM.HashMap Var Int)
+        rV v fvs = case v `HM.lookup` fvs of
+                        Just i -> ("_" ++ v ++ show i, HM.insert v (i+1) fvs)
+                        _ -> (v, HM.insert v 0 fvs)
+
+propagateRecursive :: (MonadThunkState ref m, MonadError String m) => ref -> m ref
+propagateRecursive = impl
+  where impl = propagateCtx >=> \thRef -> do
+            b' <- thExpr <$> getThunk thRef >>= impl'
+            updThunk thRef (\s -> s { thExpr = b' })
+            return thRef
+        impl' (l :~ r) = (:~) <$> impl l <*> impl r
+        impl' (l :@ r) = (:@) <$> impl l <*> impl r
+        impl' (Abs v e) = Abs v <$> impl e
+        impl' e = return e
+
 normalize :: (MonadThunkState ref m, MonadError String m) => Bool -> ref -> m ref
 normalize toNF = \r -> do
     iT <- convertToThunks elIfTrue
@@ -56,7 +91,7 @@ normalize toNF = \r -> do
     cR <- convertToThunks elCaseR
     bImpl iT iF cL cR r
   where bImpl :: (MonadThunkState ref m, MonadError String m) => ref -> ref -> ref -> ref -> ref -> m ref
-        bImpl !ifTrueTh !ifFalseTh !caseL !caseR = if toNF then implNF else implHNF
+        bImpl !ifTrueTh !ifFalseTh !caseL !caseR = if toNF then implNF >=> renameVars >=> propagateRecursive else implHNF
           where
            impl = getCached >=> repeatNorm' (withCache impl')
 
@@ -66,7 +101,7 @@ normalize toNF = \r -> do
               traceM''$ (++) "Expr for HNF (ctx propagated): " <$> thShowIdent 0 _thRef
               _th <- getThunk _thRef
               let fvs = thFree _th
-              repls <- mapM (\v -> (,) v . (++) "___" . show <$> nextThunkId) $ HS.toList fvs
+              repls <- mapM (\v -> (,) v . (++) "__v" . show <$> nextThunkId) $ HS.toList fvs
               ctx <- foldM (\b (v, v') -> flip (LHM.insert v) b <$> genNewVarThref v') (thContext _th) repls
               thRef <- joinCtx ctx _thRef
 
@@ -75,9 +110,7 @@ normalize toNF = \r -> do
               traceM''$ (++) "After HNF: " <$> thShowIdent 0 _thRef'
 
               _th' <- getThunk _thRef'
-              let ctx' = foldr' LHM.delete (thContext _th') fvs
-                  free' = thFree _th'
-              ctx'' <- foldM (\b (v, v') -> if v' `HS.member` free' then flip (LHM.insert v') b <$> genNewVarThref v else return b) ctx' repls
+              ctx'' <- foldM (\b (v, v') -> flip (LHM.insert v') b <$> genNewVarThref v) (thContext _th') repls
               thRef' <- joinCtx ctx'' _thRef'
               traceM''$ (++) "Normalized to HNF: " <$> thShowIdent 0 thRef'
               return thRef'
@@ -88,8 +121,9 @@ normalize toNF = \r -> do
                                               , thExpr = V v'
                                               , thContext = LHM.empty
                                               }
-           implNF = implHNF >=> getCached >=> propagateCtx
+           implNF = implHNF >=> getCached
                       >=> \thRef' -> do
+                             propagateCached thRef'
                              traceM''$ (++) "Normalized to HNF, ctx propagated: " <$> thShowIdent 0 thRef'
                              th <- getThunk thRef'
                              e' <- case thExpr th of
@@ -98,7 +132,11 @@ normalize toNF = \r -> do
                                Abs v s -> Abs v <$> implNF s
                                e -> return e
                              updThunk thRef' (\s -> s { thExpr = e' })
-                             propagateCtx thRef'
+                             traceM''$ (++) "Normalized to NF: " <$> thShowIdent 0 thRef'
+                             return thRef'
+                             --thRef'' <- propagateCtx thRef'
+                             --traceM''$ (++) "Normalized to NF, ctx propagated: " <$> thShowIdent 0 thRef''
+                             --return thRef''
            impl' = propagateCtx >=> \thRef -> do
                  traceM' $ (++) "Traversing to expr = " <$> thShowIdent 0 thRef
                  th <- getThunk thRef
@@ -159,24 +197,22 @@ normalize toNF = \r -> do
                              updThunk thRef (\s -> s { thExpr = qTh :@ restTh })
                              right thRef
                           Case -> case q of
-                                   qlTh :@ qrTh -> do propagateCached qlTh
-                                                      ql <- thExpr <$> getThunk qlTh
-                                                      case ql of
-                                                        InL -> do
-                                                           updThunk thRef (\s -> s { thExpr = caseL :@ qrTh })
-                                                           right thRef
-                                                        InR -> do
-                                                           updThunk thRef (\s -> s { thExpr = caseR :@ qrTh })
-                                                           right thRef
-                                                        (_ :@ _) -> digRight
-                                                        (V _) -> digRight
-                                                        _ -> synError
+                                   qlTh :@ qrTh -> do
+                                        ql <- thExpr <$> getThunk qlTh
+                                        case ql of
+                                          InL -> do
+                                             updThunk thRef (\s -> s { thExpr = caseL :@ qrTh })
+                                             right thRef
+                                          InR -> do
+                                             updThunk thRef (\s -> s { thExpr = caseR :@ qrTh })
+                                             right thRef
+                                          (_ :@ _) -> digRight
+                                          (V _) -> digRight
+                                          _ -> synError
                                    V _ -> digRight
                                    _ -> synError
                           _ :~ _ -> synError
-                          plTh :@ prTh -> do propagateCached plTh
-                                             propagateCached prTh
-                                             pl <- thExpr <$> getThunk plTh
+                          plTh :@ prTh -> do pl <- thExpr <$> getThunk plTh
                                              pr <- thExpr <$> getThunk prTh
                                              case (pl, pr, q) of
                                               (IOp op, I i, I j) -> do

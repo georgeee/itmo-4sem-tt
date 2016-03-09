@@ -56,12 +56,6 @@ class (MonadThunkId m, Show ref, Eq ref) => MonadThunkState ref m | m -> ref whe
   addThunk :: Thunk ref -> m ref
   getThunk :: ref -> m (Thunk ref)
 
---instance MonadThunkId m => MonadThunkId (ReaderT a m) where
---  nextThunkId = lift nextThunkId
---instance MonadThunkState ref m => MonadThunkState ref (ReaderT a m) where
---  getThunk = lift . getThunk
---  updThunk r = lift . updThunk r
---  addThunk = lift . addThunk
 instance MonadThunkId m => MonadThunkId (EitherT a m) where
   nextThunkId = lift nextThunkId
 instance MonadThunkState ref m => MonadThunkState ref (EitherT a m) where
@@ -115,16 +109,19 @@ ctxInnerFV = foldM (\b a -> HS.union b <$> thFree' a) HS.empty . LHM.elems
 
 encloseCtx :: MonadThunkState ref m => ref -> m ()
 encloseCtx !thRef = do
+      traceM' $ (++) "encloseCtx: " <$> thShowIdent 0 thRef
       th <- getThunk thRef
       baseFV <- baseToFreeVars $ thExpr th
       let ctx = thContext th
       ctx' <- foldM (\ctx k -> flip (LHM.insert k) ctx <$> joinCtx ctx (ctx LHM.! k)) ctx $ LHM.keys ctx
       updThunk thRef (\s -> s { thContext = ctx' `ctxFilter` baseFV })
+      traceM' $ (++) "encloseCtx: done, " <$> thShowIdent 0 thRef
 
 --propagates ctx one level down
 --returns thRef with empty context
 propagateCtx :: MonadThunkState ref m => ref -> m ref
 propagateCtx = getCached >=> \thRef -> do
+  traceM' $ (++) "propagateCtx: " <$> thShowIdent 0 thRef
   encloseCtx thRef
   propagateCached thRef
   th <- getThunk thRef
@@ -132,12 +129,14 @@ propagateCtx = getCached >=> \thRef -> do
   if F.null ctx
      then return thRef
      else do
-       let updBase e = updThunk thRef (\s -> s { thExpr = e, thContext = LHM.empty }) >> return thRef
+       let updBase e = do
+                updThunk thRef (\s -> s { thExpr = e, thContext = LHM.empty })
+                traceM' $ (++) "propagateCtx, updBase: " <$> thShowIdent 0 thRef
+                return thRef
        ctxFv <- ctxInnerFV ctx
        base' <- if F.null ctxFv
                    then return $ thExpr th
-                   else propagateChildrenCtx ctxFv (thExpr th)
-       updBase base'
+                   else propagateChildrenCtx $ thExpr th
        case base' of
           (l :~ r)  -> ( (:~) <$> joinCtx ctx l <*> joinCtx ctx r ) >>= updBase
           (l :@ r)  -> ( (:@) <$> joinCtx ctx l <*> joinCtx ctx r ) >>= updBase
@@ -147,8 +146,8 @@ propagateCtx = getCached >=> \thRef -> do
                       _ -> updBase $ V v
           b -> updBase b
 
-propagateChildrenCtx :: (MonadThunkState ref m, Foldable f, Show (f Var)) => f Var -> ExtendedLambdaBase ref -> m (ExtendedLambdaBase ref)
-propagateChildrenCtx fv = impl
+propagateChildrenCtx :: (MonadThunkState ref m) => ExtendedLambdaBase ref -> m (ExtendedLambdaBase ref)
+propagateChildrenCtx = impl
   where impl (l :~ r) = (:~) <$> impl' l <*> impl' r
         impl (l :@ r) = (:@) <$> impl' l <*> impl' r
         impl (Abs v e) = Abs v <$> impl' e
@@ -316,12 +315,10 @@ propagateCached :: MonadThunkState ref m => ref -> m ()
 propagateCached !thRef = thExpr <$> getThunk thRef >>= impl >>= \b -> updThunk thRef (\s -> s { thExpr = b })
   where
     impl :: MonadThunkState ref m => ExtendedLambdaBase ref -> m (ExtendedLambdaBase ref)
-    impl (l :~ r) = impl2 l r (:~)
-    impl (l :@ r) = impl2 l r (:@)
+    impl (l :~ r) = (:~) <$> getCached l <*> getCached r
+    impl (l :@ r) = (:@) <$> getCached l <*> getCached r
     impl (Abs v e) = Abs v <$> getCached e
     impl e = return e
-    impl2 :: MonadThunkState ref m => ref -> ref -> (ref -> ref -> ExtendedLambdaBase ref) -> m (ExtendedLambdaBase ref)
-    impl2 l r f = f <$> getCached l <*> getCached r
 
 thFree' :: MonadThunkState ref m => ref -> m (HS.HashSet Var)
 thFree' !thRef = thFree <$> getThunk thRef

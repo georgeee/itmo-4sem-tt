@@ -127,7 +127,7 @@ freshIdS :: (CounterBasedState s, MonadState s m) => String -> m String
 freshIdS s = (++) s . show <$> (gets counterNext >>= \(i, n) -> put n >> return i)
 
 freshId :: (CounterBasedState s, MonadState s m) => m String
-freshId = freshIdS "_x"
+freshId = freshIdS "__p"
 
 infixl 4 <.$>
 infixl 4 <.*>
