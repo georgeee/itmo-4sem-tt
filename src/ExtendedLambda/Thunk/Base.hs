@@ -41,6 +41,8 @@ type ThunkContext ref = LHM.LinkedHashMap Var ref
 
 type ThunkId = Int
 
+-- @TODO set thExpr, thContext to undefined after thNormalized is set
+
 data Thunk ref = Thunk { thId :: ThunkId
                        , thExpr :: ExtendedLambdaBase ref
                        , thContext :: ThunkContext ref
